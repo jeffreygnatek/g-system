@@ -22,7 +22,9 @@ pub struct Preset {
 
 impl std::fmt::Debug for Preset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Preset").field("name", &self.name()).finish()
+        f.debug_struct("Preset")
+            .field("name", &self.name())
+            .finish()
     }
 }
 
@@ -33,7 +35,9 @@ impl Preset {
 
     /// An all-zero preset with the given name (useful as an "empty" slot).
     pub fn blank(name: &str) -> Preset {
-        let mut p = Preset { raw: vec![0; PRESET_BYTES] };
+        let mut p = Preset {
+            raw: vec![0; PRESET_BYTES],
+        };
         p.set_name(name);
         p
     }
@@ -41,7 +45,12 @@ impl Preset {
     pub fn name(&self) -> String {
         let field = &self.raw[..NAME_LEN];
         let end = field.iter().position(|&b| b == 0).unwrap_or(NAME_LEN);
-        field[..end].iter().map(|&b| b as char).collect::<String>().trim_end().to_string()
+        field[..end]
+            .iter()
+            .map(|&b| b as char)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
     }
 
     /// Set the name (Latin-1, truncated to 20 chars, NUL-padded).
@@ -75,7 +84,11 @@ impl Preset {
 
     /// Build the dump message for sending to a unit.
     pub fn to_message(&self, device: u8, preset_no: u8) -> Message {
-        Message::PresetDump { device, preset: preset_no, data: self.raw.clone() }
+        Message::PresetDump {
+            device,
+            preset: preset_no,
+            data: self.raw.clone(),
+        }
     }
 }
 

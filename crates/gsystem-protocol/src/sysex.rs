@@ -60,7 +60,10 @@ impl fmt::Display for SysexError {
             SysexError::NotTc => write!(f, "not a TC Electronic message"),
             SysexError::NotGSystem => write!(f, "not a G-System message"),
             SysexError::BadChecksum { expected, found } => {
-                write!(f, "checksum mismatch: expected {expected:02X}, found {found:02X}")
+                write!(
+                    f,
+                    "checksum mismatch: expected {expected:02X}, found {found:02X}"
+                )
             }
             SysexError::BadLength { expected, found } => {
                 write!(f, "bad length: expected {expected}, found {found}")
@@ -89,7 +92,10 @@ pub fn to_nibbles(bytes: &[u8]) -> Vec<u8> {
 /// Collapse (hi, lo) nibble pairs into bytes. Errors on any byte >= 0x10.
 pub fn from_nibbles(nibbles: &[u8]) -> Result<Vec<u8>, SysexError> {
     if nibbles.len() % 2 != 0 {
-        return Err(SysexError::BadLength { expected: nibbles.len() + 1, found: nibbles.len() });
+        return Err(SysexError::BadLength {
+            expected: nibbles.len() + 1,
+            found: nibbles.len(),
+        });
     }
     let mut out = Vec::with_capacity(nibbles.len() / 2);
     for (i, pair) in nibbles.chunks_exact(2).enumerate() {
@@ -107,13 +113,33 @@ pub fn from_nibbles(nibbles: &[u8]) -> Result<Vec<u8>, SysexError> {
 /// A parsed G-System message. `Unknown` keeps the raw payload so nothing is lost.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
-    PresetDump { device: u8, preset: u8, data: Vec<u8> },
-    EditMode { device: u8, on: bool },
+    PresetDump {
+        device: u8,
+        preset: u8,
+        data: Vec<u8>,
+    },
+    EditMode {
+        device: u8,
+        on: bool,
+    },
     /// `22 01 00 <n> ...` — select/request preset `n`.
-    PresetRequest { device: u8, preset: u8, tail: Vec<u8> },
+    PresetRequest {
+        device: u8,
+        preset: u8,
+        tail: Vec<u8>,
+    },
     /// `47 <block> <param> <value bytes...>`
-    Param { device: u8, block: u8, param: u8, raw: Vec<u8> },
-    Unknown { device: u8, kind: u8, payload: Vec<u8> },
+    Param {
+        device: u8,
+        block: u8,
+        param: u8,
+        raw: Vec<u8>,
+    },
+    Unknown {
+        device: u8,
+        kind: u8,
+        payload: Vec<u8>,
+    },
 }
 
 impl Message {
@@ -141,11 +167,21 @@ impl Message {
                 let chk = payload[3 + PRESET_NIBBLES];
                 let calc = nibble_checksum(nibbles);
                 if chk != calc {
-                    return Err(SysexError::BadChecksum { expected: calc, found: chk });
+                    return Err(SysexError::BadChecksum {
+                        expected: calc,
+                        found: chk,
+                    });
                 }
-                Message::PresetDump { device, preset, data: from_nibbles(nibbles)? }
+                Message::PresetDump {
+                    device,
+                    preset,
+                    data: from_nibbles(nibbles)?,
+                }
             }
-            msg::EDIT_MODE if payload.len() == 1 => Message::EditMode { device, on: payload[0] != 0 },
+            msg::EDIT_MODE if payload.len() == 1 => Message::EditMode {
+                device,
+                on: payload[0] != 0,
+            },
             msg::REQUEST if payload.len() >= 3 && payload[0] == 0x01 => Message::PresetRequest {
                 device,
                 preset: payload[2],
@@ -157,14 +193,22 @@ impl Message {
                 param: payload[1],
                 raw: payload[2..].to_vec(),
             },
-            _ => Message::Unknown { device, kind, payload: payload.to_vec() },
+            _ => Message::Unknown {
+                device,
+                kind,
+                payload: payload.to_vec(),
+            },
         })
     }
 
     /// Serialize to a framed message.
     pub fn encode(&self) -> Vec<u8> {
         let (device, kind, payload): (u8, u8, Vec<u8>) = match self {
-            Message::PresetDump { device, preset, data } => {
+            Message::PresetDump {
+                device,
+                preset,
+                data,
+            } => {
                 assert_eq!(data.len(), PRESET_BYTES, "preset payload must be 516 bytes");
                 let nib = to_nibbles(data);
                 let mut p = vec![0x01, 0x00, *preset];
@@ -173,17 +217,30 @@ impl Message {
                 (*device, msg::PRESET_DUMP, p)
             }
             Message::EditMode { device, on } => (*device, msg::EDIT_MODE, vec![*on as u8]),
-            Message::PresetRequest { device, preset, tail } => {
+            Message::PresetRequest {
+                device,
+                preset,
+                tail,
+            } => {
                 let mut p = vec![0x01, 0x00, *preset];
                 p.extend_from_slice(tail);
                 (*device, msg::REQUEST, p)
             }
-            Message::Param { device, block, param, raw } => {
+            Message::Param {
+                device,
+                block,
+                param,
+                raw,
+            } => {
                 let mut p = vec![*block, *param];
                 p.extend_from_slice(raw);
                 (*device, msg::PARAM, p)
             }
-            Message::Unknown { device, kind, payload } => (*device, *kind, payload.clone()),
+            Message::Unknown {
+                device,
+                kind,
+                payload,
+            } => (*device, *kind, payload.clone()),
         };
         let mut out = Vec::with_capacity(8 + payload.len());
         out.push(SYSEX_START);
@@ -198,7 +255,11 @@ impl Message {
 
     /// The canonical "request preset n" message as the Vyzor editor sends it.
     pub fn preset_request(device: u8, preset: u8) -> Message {
-        Message::PresetRequest { device, preset, tail: vec![0, 0, 0, 0, 0, 1] }
+        Message::PresetRequest {
+            device,
+            preset,
+            tail: vec![0, 0, 0, 0, 0, 1],
+        }
     }
 }
 
@@ -232,7 +293,10 @@ mod tests {
 
     #[test]
     fn edit_mode_roundtrip() {
-        let m = Message::EditMode { device: 0, on: true };
+        let m = Message::EditMode {
+            device: 0,
+            on: true,
+        };
         let b = m.encode();
         assert_eq!(b, [0xF0, 0x00, 0x20, 0x1F, 0x00, 0x55, 0x57, 0x01, 0xF7]);
         assert_eq!(Message::parse(&b).unwrap(), m);
@@ -241,7 +305,9 @@ mod tests {
     #[test]
     fn preset_request_matches_capture() {
         // From Twilight.Prs TRAN chunk
-        let cap = [0xF0, 0x00, 0x20, 0x1F, 0x00, 0x55, 0x22, 0x01, 0x00, 0x1D, 0, 0, 0, 0, 0, 1, 0xF7];
+        let cap = [
+            0xF0, 0x00, 0x20, 0x1F, 0x00, 0x55, 0x22, 0x01, 0x00, 0x1D, 0, 0, 0, 0, 0, 1, 0xF7,
+        ];
         assert_eq!(Message::preset_request(0, 0x1D).encode(), cap);
     }
 }

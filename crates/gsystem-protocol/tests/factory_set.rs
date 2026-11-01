@@ -3,7 +3,11 @@ use gsystem_protocol::sysex::Message;
 use gsystem_protocol::{syx, vyzor};
 
 fn factory() -> Vec<u8> {
-    std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/Factory_Set.SQS")).unwrap()
+    std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../testdata/Factory_Set.SQS"
+    ))
+    .unwrap()
 }
 
 #[test]
@@ -30,7 +34,7 @@ fn preset_dump_roundtrip_is_byte_exact() {
     let b = factory();
     let forms = vyzor::parse_forms(&b).unwrap();
     let body = forms[1].chunk(b"BODY").unwrap(); // forms[1] is the "User Bank" document
-    // first ten slots keep their full header: compare encode() to the original bytes
+                                                 // first ten slots keep their full header: compare encode() to the original bytes
     for slot in body.data.chunks(vyzor::SLOT_LEN).take(10) {
         let original = &slot[..gsystem_protocol::sysex::PRESET_DUMP_LEN];
         let msg = Message::parse(original).unwrap();
@@ -64,7 +68,11 @@ fn rename_and_params() {
 
 #[test]
 fn prs_file_has_editor_scripts() {
-    let b = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/Twilight.Prs")).unwrap();
+    let b = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../testdata/Twilight.Prs"
+    ))
+    .unwrap();
     let forms = vyzor::parse_forms(&b).unwrap();
     assert_eq!(forms[0].file_name().unwrap(), "Twilight.Prs");
     let msgs = vyzor::script_messages(&forms[0]);

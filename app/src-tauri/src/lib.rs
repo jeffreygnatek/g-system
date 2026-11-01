@@ -42,14 +42,22 @@ fn view(bank: &Bank, path: &Option<String>, dirty: &std::collections::BTreeSet<u
             .slots
             .iter()
             .enumerate()
-            .map(|(i, s)| SlotView { index: i, label: slot_label(i), name: s.as_ref().map(|p| p.name()) })
+            .map(|(i, s)| SlotView {
+                index: i,
+                label: slot_label(i),
+                name: s.as_ref().map(|p| p.name()),
+            })
             .collect(),
     }
 }
 
 #[tauri::command]
 fn get_bank(state: State<AppState>) -> BankView {
-    view(&state.bank.lock().unwrap(), &state.path.lock().unwrap(), &state.dirty.lock().unwrap())
+    view(
+        &state.bank.lock().unwrap(),
+        &state.path.lock().unwrap(),
+        &state.dirty.lock().unwrap(),
+    )
 }
 
 #[tauri::command]
@@ -74,7 +82,11 @@ fn save_syx(path: String, state: State<AppState>) -> Result<(), String> {
 fn rename_slot(index: usize, name: String, state: State<AppState>) -> Result<BankView, String> {
     {
         let mut bank = state.bank.lock().unwrap();
-        let slot = bank.slots.get_mut(index).and_then(|s| s.as_mut()).ok_or("empty slot")?;
+        let slot = bank
+            .slots
+            .get_mut(index)
+            .and_then(|s| s.as_mut())
+            .ok_or("empty slot")?;
         slot.set_name(&name);
     }
     state.dirty.lock().unwrap().insert(index);
@@ -125,7 +137,11 @@ fn slot_detail(index: usize, state: State<AppState>) -> Result<serde_json::Value
 #[tauri::command]
 fn set_param(index: usize, param: usize, value: i32, state: State<AppState>) -> Result<(), String> {
     let mut bank = state.bank.lock().unwrap();
-    let p = bank.slots.get_mut(index).and_then(|s| s.as_mut()).ok_or("empty slot")?;
+    let p = bank
+        .slots
+        .get_mut(index)
+        .and_then(|s| s.as_mut())
+        .ok_or("empty slot")?;
     if param >= gsystem_protocol::preset::PARAM_COUNT {
         return Err("param index out of range".into());
     }
@@ -162,15 +178,29 @@ fn midi_ports() -> Result<Ports, String> {
     let inp = midir::MidiInput::new("gsystem-editor").map_err(|e| e.to_string())?;
     let out = midir::MidiOutput::new("gsystem-editor").map_err(|e| e.to_string())?;
     Ok(Ports {
-        inputs: inp.ports().iter().filter_map(|p| inp.port_name(p).ok()).collect(),
-        outputs: out.ports().iter().filter_map(|p| out.port_name(p).ok()).collect(),
+        inputs: inp
+            .ports()
+            .iter()
+            .filter_map(|p| inp.port_name(p).ok())
+            .collect(),
+        outputs: out
+            .ports()
+            .iter()
+            .filter_map(|p| out.port_name(p).ok())
+            .collect(),
     })
 }
 
 /// Request slots `from..=to` from the unit and merge them into the open bank.
 /// Returns the slot indices that answered.
 #[tauri::command]
-fn midi_backup(input: String, output: String, from: usize, to: usize, state: State<AppState>) -> Result<Vec<usize>, String> {
+fn midi_backup(
+    input: String,
+    output: String,
+    from: usize,
+    to: usize,
+    state: State<AppState>,
+) -> Result<Vec<usize>, String> {
     let mut inp = midir::MidiInput::new("gsystem-editor").map_err(|e| e.to_string())?;
     inp.ignore(midir::Ignore::None);
     let in_port = inp
@@ -186,13 +216,22 @@ fn midi_backup(input: String, output: String, from: usize, to: usize, state: Sta
         .ok_or("output port not found")?;
     let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let _conn_in = inp
-        .connect(&in_port, "in", move |_, bytes, _| { let _ = tx.send(bytes.to_vec()); }, ())
+        .connect(
+            &in_port,
+            "in",
+            move |_, bytes, _| {
+                let _ = tx.send(bytes.to_vec());
+            },
+            (),
+        )
         .map_err(|e| e.to_string())?;
     let mut conn_out = out.connect(&out_port, "out").map_err(|e| e.to_string())?;
 
     let mut got = Vec::new();
     for slot in from..=to.min(199) {
-        conn_out.send(&Message::preset_request(0, slot as u8).encode()).map_err(|e| e.to_string())?;
+        conn_out
+            .send(&Message::preset_request(0, slot as u8).encode())
+            .map_err(|e| e.to_string())?;
         let deadline = Instant::now() + Duration::from_millis(3500);
         while let Ok(bytes) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             if let Ok(Message::PresetDump { data, .. }) = Message::parse(&bytes) {
@@ -211,7 +250,12 @@ fn midi_backup(input: String, output: String, from: usize, to: usize, state: Sta
 
 /// Send the occupied slots in `from..=to` to the unit.
 #[tauri::command]
-fn midi_send(output: String, from: usize, to: usize, state: State<AppState>) -> Result<usize, String> {
+fn midi_send(
+    output: String,
+    from: usize,
+    to: usize,
+    state: State<AppState>,
+) -> Result<usize, String> {
     let out = midir::MidiOutput::new("gsystem-editor").map_err(|e| e.to_string())?;
     let out_port = out
         .ports()
@@ -223,7 +267,8 @@ fn midi_send(output: String, from: usize, to: usize, state: State<AppState>) -> 
     let mut n = 0;
     for slot in from..=to.min(199) {
         if let Some(p) = bank.get(slot) {
-            conn.send(&p.to_message(0, slot as u8).encode()).map_err(|e| e.to_string())?;
+            conn.send(&p.to_message(0, slot as u8).encode())
+                .map_err(|e| e.to_string())?;
             state.dirty.lock().unwrap().remove(&slot);
             n += 1;
             std::thread::sleep(Duration::from_millis(150));
@@ -238,8 +283,19 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
-            get_bank, open_bank, save_syx, rename_slot, swap_slots, copy_slot, clear_slot, insert_slot, set_param,
-            slot_detail, midi_ports, midi_backup, midi_send
+            get_bank,
+            open_bank,
+            save_syx,
+            rename_slot,
+            swap_slots,
+            copy_slot,
+            clear_slot,
+            insert_slot,
+            set_param,
+            slot_detail,
+            midi_ports,
+            midi_backup,
+            midi_send
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

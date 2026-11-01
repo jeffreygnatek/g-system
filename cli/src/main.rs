@@ -61,7 +61,9 @@ fn main() {
     // `gsys list … | head` should not panic on a closed pipe.
     #[cfg(unix)]
     unsafe {
-        extern "C" { fn signal(sig: i32, handler: usize) -> usize; }
+        extern "C" {
+            fn signal(sig: i32, handler: usize) -> usize;
+        }
         signal(13 /* SIGPIPE */, 0 /* SIG_DFL */);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -92,7 +94,11 @@ fn main() {
         "scripts" => {
             let bytes = std::fs::read(a(1)).expect("read");
             for f in vyzor::parse_forms(&bytes).expect("vyzor") {
-                println!("== {} ({})", f.file_name().unwrap_or_default(), f.document_kind().unwrap_or_default());
+                println!(
+                    "== {} ({})",
+                    f.file_name().unwrap_or_default(),
+                    f.document_kind().unwrap_or_default()
+                );
                 for (chunk, m) in vyzor::script_messages(&f) {
                     match m {
                         Ok(m) => println!("  {chunk}: {m:?}"),
@@ -119,7 +125,13 @@ fn main() {
         "request" => {
             let slot: u8 = a(3).parse().unwrap_or_else(|_| usage());
             match midi::request_preset(a(1), a(2), slot) {
-                Some(p) => println!("{}  {}  {}\n{}", slot, slot_label(slot as usize), p.name(), hex(&p.raw)),
+                Some(p) => println!(
+                    "{}  {}  {}\n{}",
+                    slot,
+                    slot_label(slot as usize),
+                    p.name(),
+                    hex(&p.raw)
+                ),
                 None => {
                     eprintln!("no dump received (check cables, MIDI channel, and that SysEx is enabled on the unit)");
                     std::process::exit(1)
@@ -145,7 +157,10 @@ fn main() {
         "send" => {
             let bytes = std::fs::read(a(3)).expect("read");
             let (msgs, _) = syx::parse_all(&bytes);
-            let dumps: Vec<Message> = msgs.into_iter().filter(|m| matches!(m, Message::PresetDump { .. })).collect();
+            let dumps: Vec<Message> = msgs
+                .into_iter()
+                .filter(|m| matches!(m, Message::PresetDump { .. }))
+                .collect();
             midi::send_dumps(a(1), a(2), &dumps);
         }
         "raw" => {
@@ -161,5 +176,8 @@ fn main() {
 }
 
 fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(" ")
+    b.iter()
+        .map(|x| format!("{x:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }

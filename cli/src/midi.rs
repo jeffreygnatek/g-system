@@ -106,7 +106,8 @@ pub fn send_raw(out_name: &str, bytes: &[u8]) {
 pub fn request_preset(in_name: &str, out_name: &str, slot: u8) -> Option<Preset> {
     let (_conn, rx) = open_in(in_name);
     let mut out = open_out(out_name);
-    out.send(&Message::preset_request(0, slot).encode()).expect("send");
+    out.send(&Message::preset_request(0, slot).encode())
+        .expect("send");
     let deadline = Instant::now() + REPLY_TIMEOUT;
     while let Ok(bytes) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
         if let Ok(Message::PresetDump { data, .. }) = Message::parse(&bytes) {
@@ -134,5 +135,8 @@ pub fn send_dumps(in_name: &str, out_name: &str, dumps: &[Message]) {
 }
 
 fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(" ")
+    b.iter()
+        .map(|x| format!("{x:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }

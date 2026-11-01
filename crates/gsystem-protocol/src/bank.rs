@@ -13,7 +13,9 @@ pub struct Bank {
 
 impl Bank {
     pub fn empty() -> Bank {
-        Bank { slots: vec![None; SLOTS] }
+        Bank {
+            slots: vec![None; SLOTS],
+        }
     }
 
     pub fn set(&mut self, index: usize, p: Preset) {

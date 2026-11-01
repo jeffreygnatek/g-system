@@ -16,6 +16,22 @@ testdata/                 Factory_Set.SQS (100 factory presets), Twilight.Prs
 tools/                    gsys_preset_decode.py — the Python prototype of the codec
 ```
 
+## Installing
+
+Download from the [Releases](https://github.com/jeffreygnatek/g-system/releases) page:
+
+- **macOS** — `.dmg` (Apple Silicon or Intel). The build is not signed: the
+  first time, right-click the app and choose **Open**, or run
+  `xattr -dr com.apple.quarantine "/Applications/G-System Editor.app"`.
+- **Linux** — `.deb` or `.AppImage`.
+- **Windows** — `.msi`.
+- `gsys-*` archives are the command-line tool on its own.
+
+Releases are built by GitHub Actions when a `v*` tag is pushed
+(`git tag v0.1.0 && git push origin v0.1.0`) and appear as a draft to
+publish by hand. Set the `APPLE_*` secrets named in
+`.github/workflows/release.yml` to get signed and notarized macOS builds.
+
 ## Build
 
 Requirements: Rust (stable), Node 20+. On Linux also ALSA headers

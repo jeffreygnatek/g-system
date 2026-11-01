@@ -71,13 +71,19 @@ fn walk_chunks<'a>(b: &'a [u8], base: usize, declared: usize) -> Vec<Chunk<'a>> 
     let mut off = 0;
     while off + 8 <= b.len() && off < declared {
         let tag: [u8; 4] = b[off..off + 4].try_into().unwrap();
-        let Some(len) = be32(&b[off + 4..]) else { break };
+        let Some(len) = be32(&b[off + 4..]) else {
+            break;
+        };
         let start = off + 8;
         let end = (start + len).min(b.len());
         if tag == [0; 4] {
             break; // trailing padding in .SQS
         }
-        out.push(Chunk { tag, data: &b[start..end], offset: base + start });
+        out.push(Chunk {
+            tag,
+            data: &b[start..end],
+            offset: base + start,
+        });
         off = start + len + (len & 1);
     }
     out
@@ -95,7 +101,10 @@ pub fn parse_forms(b: &[u8]) -> Result<Vec<Form<'_>>, Error> {
         let body = b.get(start..)?;
         (body.len() >= 4).then(|| {
             let kind: [u8; 4] = body[..4].try_into().unwrap();
-            Form { kind, chunks: walk_chunks(&body[4..], start + 4, declared.saturating_sub(4)) }
+            Form {
+                kind,
+                chunks: walk_chunks(&body[4..], start + 4, declared.saturating_sub(4)),
+            }
         })
     }
     if top == b"FORM" {
@@ -139,7 +148,9 @@ pub fn load_bank(b: &[u8]) -> Result<Bank, Error> {
     // not a dump), "Edit Buffer", "User Bank" (200 × 1310-byte dump slots).
     // Try every BODY; only real dump slots decode.
     for f in &forms {
-        let Some(body) = f.chunk(b"BODY") else { continue };
+        let Some(body) = f.chunk(b"BODY") else {
+            continue;
+        };
         if body.data.len() % SLOT_LEN != 0 {
             continue;
         }
