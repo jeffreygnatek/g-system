@@ -14,6 +14,8 @@ use tauri::State;
 struct AppState {
     bank: Mutex<Bank>,
     path: Mutex<Option<String>>,
+    /// Slots changed since the last open / sync, for the amber "unsynced" dot.
+    dirty: Mutex<std::collections::BTreeSet<usize>>,
 }
 
 #[derive(Serialize)]
@@ -27,13 +29,15 @@ struct SlotView {
 struct BankView {
     path: Option<String>,
     occupied: usize,
+    dirty: Vec<usize>,
     slots: Vec<SlotView>,
 }
 
-fn view(bank: &Bank, path: &Option<String>) -> BankView {
+fn view(bank: &Bank, path: &Option<String>, dirty: &std::collections::BTreeSet<usize>) -> BankView {
     BankView {
         path: path.clone(),
         occupied: bank.occupied(),
+        dirty: dirty.iter().copied().collect(),
         slots: bank
             .slots
             .iter()
@@ -45,7 +49,7 @@ fn view(bank: &Bank, path: &Option<String>) -> BankView {
 
 #[tauri::command]
 fn get_bank(state: State<AppState>) -> BankView {
-    view(&state.bank.lock().unwrap(), &state.path.lock().unwrap())
+    view(&state.bank.lock().unwrap(), &state.path.lock().unwrap(), &state.dirty.lock().unwrap())
 }
 
 #[tauri::command]
@@ -56,6 +60,7 @@ fn open_bank(path: String, state: State<AppState>) -> Result<BankView, String> {
         .map_err(|e| format!("Not a G-System bank: {e}"))?;
     *state.bank.lock().unwrap() = bank;
     *state.path.lock().unwrap() = Some(path);
+    state.dirty.lock().unwrap().clear();
     Ok(get_bank(state))
 }
 
@@ -72,12 +77,14 @@ fn rename_slot(index: usize, name: String, state: State<AppState>) -> Result<Ban
         let slot = bank.slots.get_mut(index).and_then(|s| s.as_mut()).ok_or("empty slot")?;
         slot.set_name(&name);
     }
+    state.dirty.lock().unwrap().insert(index);
     Ok(get_bank(state))
 }
 
 #[tauri::command]
 fn swap_slots(a: usize, b: usize, state: State<AppState>) -> BankView {
     state.bank.lock().unwrap().swap(a, b);
+    state.dirty.lock().unwrap().extend([a, b]);
     get_bank(state)
 }
 
@@ -88,6 +95,7 @@ fn copy_slot(from: usize, to: usize, state: State<AppState>) -> Result<BankView,
         let p = bank.get(from).cloned().ok_or("empty slot")?;
         bank.set(to, p);
     }
+    state.dirty.lock().unwrap().insert(to);
     Ok(get_bank(state))
 }
 
@@ -96,6 +104,7 @@ fn clear_slot(index: usize, state: State<AppState>) -> BankView {
     if let Some(s) = state.bank.lock().unwrap().slots.get_mut(index) {
         *s = None;
     }
+    state.dirty.lock().unwrap().insert(index);
     get_bank(state)
 }
 
@@ -109,6 +118,35 @@ fn slot_detail(index: usize, state: State<AppState>) -> Result<serde_json::Value
         "params_i24": p.params_i24(),
         "raw_hex": p.raw.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "),
     }))
+}
+
+/// Write one int24 parameter by slot index. The UI's parameter table decides
+/// which index means what; this stays dumb on purpose.
+#[tauri::command]
+fn set_param(index: usize, param: usize, value: i32, state: State<AppState>) -> Result<(), String> {
+    let mut bank = state.bank.lock().unwrap();
+    let p = bank.slots.get_mut(index).and_then(|s| s.as_mut()).ok_or("empty slot")?;
+    if param >= gsystem_protocol::preset::PARAM_COUNT {
+        return Err("param index out of range".into());
+    }
+    p.set_param_i24(param, value);
+    state.dirty.lock().unwrap().insert(index);
+    Ok(())
+}
+
+/// Move `from` to `to`, shifting the slots in between (Vyzor's shift-drag "insert").
+#[tauri::command]
+fn insert_slot(from: usize, to: usize, state: State<AppState>) -> BankView {
+    {
+        let mut bank = state.bank.lock().unwrap();
+        if from < bank.slots.len() && to < bank.slots.len() && from != to {
+            let p = bank.slots.remove(from);
+            bank.slots.insert(to, p);
+            let (lo, hi) = if from < to { (from, to) } else { (to, from) };
+            state.dirty.lock().unwrap().extend(lo..=hi);
+        }
+    }
+    get_bank(state)
 }
 
 // ---- MIDI -----------------------------------------------------------------
@@ -160,6 +198,7 @@ fn midi_backup(input: String, output: String, from: usize, to: usize, state: Sta
             if let Ok(Message::PresetDump { data, .. }) = Message::parse(&bytes) {
                 if let Some(p) = Preset::from_raw(data) {
                     state.bank.lock().unwrap().set(slot, p);
+                    state.dirty.lock().unwrap().remove(&slot);
                     got.push(slot);
                 }
                 break;
@@ -185,6 +224,7 @@ fn midi_send(output: String, from: usize, to: usize, state: State<AppState>) -> 
     for slot in from..=to.min(199) {
         if let Some(p) = bank.get(slot) {
             conn.send(&p.to_message(0, slot as u8).encode()).map_err(|e| e.to_string())?;
+            state.dirty.lock().unwrap().remove(&slot);
             n += 1;
             std::thread::sleep(Duration::from_millis(150));
         }
@@ -198,8 +238,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
-            get_bank, open_bank, save_syx, rename_slot, swap_slots, copy_slot, clear_slot, slot_detail,
-            midi_ports, midi_backup, midi_send
+            get_bank, open_bank, save_syx, rename_slot, swap_slots, copy_slot, clear_slot, insert_slot, set_param,
+            slot_detail, midi_ports, midi_backup, midi_send
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
