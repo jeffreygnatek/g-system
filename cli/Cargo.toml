@@ -1,0 +1,15 @@
+[package]
+name = "gsys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line librarian and MIDI tool for the TC Electronic G-System"
+
+[[bin]]
+name = "gsys"
+path = "src/main.rs"
+
+[dependencies]
+gsystem-protocol = { path = "../crates/gsystem-protocol", features = ["serde"] }
+midir = "0.10"
+serde_json = "1"
