@@ -222,31 +222,73 @@ struct Ports {
 
 #[tauri::command]
 fn midi_ports() -> Result<Ports, String> {
-    let inp = midir::MidiInput::new("gsystem-editor").map_err(|e| e.to_string())?;
-    let out = midir::MidiOutput::new("gsystem-editor").map_err(|e| e.to_string())?;
-    Ok(Ports {
-        inputs: inp
-            .ports()
-            .iter()
-            .filter_map(|p| inp.port_name(p).ok())
-            .collect(),
-        outputs: out
-            .ports()
-            .iter()
-            .filter_map(|p| out.port_name(p).ok())
-            .collect(),
-    })
+    // macOS creates no MIDI port for the G-System's own USB connection. When
+    // it's plugged in and no MIDI port carries its name, offer the direct USB
+    // connection first (Linux and Windows usually make a port; use that).
+    let mut ports = Ports {
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+    };
+    let inp = midir::MidiInput::new("gsystem-editor");
+    let out = midir::MidiOutput::new("gsystem-editor");
+    let midi_err = match (inp, out) {
+        (Ok(inp), Ok(out)) => {
+            ports
+                .inputs
+                .extend(inp.ports().iter().filter_map(|p| inp.port_name(p).ok()));
+            ports
+                .outputs
+                .extend(out.ports().iter().filter_map(|p| out.port_name(p).ok()));
+            None
+        }
+        (Err(e), _) => Some(e.to_string()),
+        (_, Err(e)) => Some(e.to_string()),
+    };
+    let named = ports
+        .inputs
+        .iter()
+        .any(|p| p.to_lowercase().contains("g-system"));
+    if !named && gsystem_usb::present() {
+        ports.inputs.insert(0, gsystem_usb::PORT_NAME.to_string());
+        ports.outputs.insert(0, gsystem_usb::PORT_NAME.to_string());
+    } else if let Some(e) = midi_err {
+        return Err(e);
+    }
+    Ok(ports)
+}
+
+/// Where messages to the unit go: a MIDI port, or the direct USB connection.
+enum MidiOut {
+    Port(midir::MidiOutputConnection),
+    Usb(gsystem_usb::UsbMidi),
+}
+
+impl MidiOut {
+    fn send(&mut self, bytes: &[u8]) -> Result<(), String> {
+        match self {
+            MidiOut::Port(p) => p.send(bytes).map_err(|e| e.to_string()),
+            MidiOut::Usb(u) => u.send(bytes),
+        }
+    }
 }
 
 /// One open in/out pair, with incoming bytes reassembled into whole SysEx messages.
 struct Midi {
-    _in: midir::MidiInputConnection<()>,
+    _in: Option<midir::MidiInputConnection<()>>,
     rx: std::sync::mpsc::Receiver<Vec<u8>>,
-    out: midir::MidiOutputConnection,
+    out: MidiOut,
 }
 
 impl Midi {
     fn open(input: &str, output: &str) -> Result<Midi, String> {
+        if input == gsystem_usb::PORT_NAME || output == gsystem_usb::PORT_NAME {
+            let (usb, rx) = gsystem_usb::open()?;
+            return Ok(Midi {
+                _in: None,
+                rx,
+                out: MidiOut::Usb(usb),
+            });
+        }
         let mut inp = midir::MidiInput::new("gsystem-editor").map_err(|e| e.to_string())?;
         inp.ignore(midir::Ignore::None);
         let in_port = inp
@@ -283,7 +325,11 @@ impl Midi {
             )
             .map_err(|e| e.to_string())?;
         let out = out.connect(&out_port, "out").map_err(|e| e.to_string())?;
-        Ok(Midi { _in: conn, rx, out })
+        Ok(Midi {
+            _in: Some(conn),
+            rx,
+            out: MidiOut::Port(out),
+        })
     }
 
     fn wait<T>(&self, timeout: Duration, mut pick: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {

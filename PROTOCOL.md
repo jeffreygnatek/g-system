@@ -17,9 +17,14 @@ Sources, and how much to trust each line:
 
 ## Transport
 
-- **USB**: the unit's own USB port appears as a **MIDI device** on modern
-  macOS, Linux and Android **[DA]**. Our earlier guess that it was a HID-only
-  device (from class names in the 2008 updater binary) was wrong.
+- **USB**: TC Electronic vendor `0x1220`, product `0x0005`, full speed. The
+  configuration has a USB-MIDI *streaming* interface (class 1, subclass 3)
+  but **no Audio Control interface**, which the USB-MIDI spec requires next
+  to it **[ours, from a unit on macOS]**. Linux and Android accept it and
+  create a MIDI port **[DA]**; **macOS doesn't attach its MIDI driver, so no
+  MIDI port appears.** Since nothing claims the interface, the editor and
+  `gsys` open it directly with libusb and exchange USB-MIDI 1.0 event packets
+  (crate `gsystem-usb`; the port is shown as "G-System (USB)").
 - **5-pin MIDI** through any USB-MIDI interface also works.
 
 ## SysEx framing [ours, DA]

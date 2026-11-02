@@ -12,4 +12,5 @@ path = "src/main.rs"
 [dependencies]
 gsystem-protocol = { path = "../crates/gsystem-protocol", features = ["serde"] }
 midir = "0.10"
+gsystem-usb = { path = "../crates/gsystem-usb" }
 serde_json = { version = "1", features = ["preserve_order"] }

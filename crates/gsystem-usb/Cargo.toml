@@ -1,0 +1,9 @@
+[package]
+name = "gsystem-usb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Direct USB-MIDI access to the TC Electronic G-System (for macOS, which creates no MIDI port for it)"
+
+[dependencies]
+rusb = { version = "0.9", features = ["vendored"] }

@@ -21,29 +21,51 @@ const IDENTIFY_TIMEOUT: Duration = Duration::from_millis(1500);
 const STORE_STEP: Duration = Duration::from_millis(100);
 const STORE_SETTLE: Duration = Duration::from_millis(1500);
 
-fn midi_unavailable(e: impl std::fmt::Display) -> ! {
-    eprintln!("MIDI is not available on this system ({e}). On Linux make sure ALSA's sequencer is loaded (`modprobe snd-seq`).");
-    std::process::exit(1)
+pub fn list_ports() {
+    match (MidiInput::new(CLIENT), MidiOutput::new(CLIENT)) {
+        (Ok(inp), Ok(out)) => {
+            println!("Inputs:");
+            for p in inp.ports() {
+                println!("  {}", inp.port_name(&p).unwrap_or_default());
+            }
+            println!("Outputs:");
+            for p in out.ports() {
+                println!("  {}", out.port_name(&p).unwrap_or_default());
+            }
+        }
+        (Err(e), _) => eprintln!("MIDI is not available on this system ({e})."),
+        (_, Err(e)) => eprintln!("MIDI is not available on this system ({e})."),
+    }
+    if gsystem_usb::present() {
+        println!(
+            "Direct USB:\n  {}   (use the port name \"usb\", or \"G-System\" when no MIDI port has that name)",
+            gsystem_usb::PORT_NAME
+        );
+    } else {
+        println!("Direct USB: no G-System found");
+    }
 }
 
-pub fn list_ports() {
-    let inp = MidiInput::new(CLIENT).unwrap_or_else(|e| midi_unavailable(e));
-    println!("Inputs:");
-    for p in inp.ports() {
-        println!("  {}", inp.port_name(&p).unwrap_or_default());
-    }
-    let out = MidiOutput::new(CLIENT).unwrap_or_else(|e| midi_unavailable(e));
-    println!("Outputs:");
-    for p in out.ports() {
-        println!("  {}", out.port_name(&p).unwrap_or_default());
-    }
+enum Out {
+    Midi(MidiOutputConnection),
+    Usb(gsystem_usb::UsbMidi),
 }
 
 /// An open in/out pair. Port names match by case-insensitive substring.
 pub struct Session {
-    _in: MidiInputConnection<()>,
+    _in: Option<MidiInputConnection<()>>,
     rx: mpsc::Receiver<Vec<u8>>,
-    out: MidiOutputConnection,
+    out: Out,
+}
+
+/// Use the direct USB connection? Yes for the port name "usb", and for a name
+/// no MIDI port matches when a G-System is on USB (macOS creates no MIDI port
+/// for it; see the gsystem-usb crate).
+fn wants_usb(name: &str, midi_ports: &[String]) -> bool {
+    let n = name.trim().to_lowercase();
+    n == "usb"
+        || n == gsystem_usb::PORT_NAME.to_lowercase()
+        || (!midi_ports.iter().any(|p| matches(p, name)) && gsystem_usb::present())
 }
 
 fn matches(port: &str, want: &str) -> bool {
@@ -64,7 +86,25 @@ impl Session {
         let unavailable = |e: &dyn std::fmt::Display| {
             format!("MIDI is not available on this system ({e}). On Linux make sure ALSA's sequencer is loaded (`modprobe snd-seq`).")
         };
-        let mut inp = MidiInput::new(CLIENT).map_err(|e| unavailable(&e))?;
+        let midi = MidiInput::new(CLIENT);
+        let names: Vec<String> = match &midi {
+            Ok(inp) => inp
+                .ports()
+                .iter()
+                .filter_map(|p| inp.port_name(p).ok())
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        if wants_usb(in_name, &names) && wants_usb(out_name, &names) {
+            let (usb, rx) = gsystem_usb::open()?;
+            eprintln!("using {} (direct USB)", gsystem_usb::PORT_NAME);
+            return Ok(Session {
+                _in: None,
+                rx,
+                out: Out::Usb(usb),
+            });
+        }
+        let mut inp = midi.map_err(|e| unavailable(&e))?;
         inp.ignore(midir::Ignore::None);
         let in_port = inp
             .ports()
@@ -113,11 +153,22 @@ impl Session {
         let out = out
             .connect(&out_port, CLIENT)
             .map_err(|e| format!("cannot open MIDI output {out_name:?}: {e}"))?;
-        Ok(Session { _in: conn, rx, out })
+        Ok(Session {
+            _in: Some(conn),
+            rx,
+            out: Out::Midi(out),
+        })
     }
 
     fn send(&mut self, bytes: &[u8]) {
-        self.out.send(bytes).expect("send");
+        self.try_send(bytes).expect("send");
+    }
+
+    fn try_send(&mut self, bytes: &[u8]) -> Result<(), String> {
+        match &mut self.out {
+            Out::Midi(m) => m.send(bytes).map_err(|e| e.to_string()),
+            Out::Usb(u) => u.send(bytes),
+        }
     }
 
     fn drain(&self) {
@@ -173,8 +224,7 @@ impl Session {
     /// [`send_all`](Self::send_all), returning send errors instead of panicking.
     pub fn try_send_all(&mut self, msgs: &[Message]) -> Result<(), String> {
         for m in msgs {
-            self.out
-                .send(&m.encode())
+            self.try_send(&m.encode())
                 .map_err(|e| format!("MIDI send failed: {e}"))?;
             std::thread::sleep(Duration::from_millis(
                 gsystem_protocol::live::SEND_INTERVAL_MS,
