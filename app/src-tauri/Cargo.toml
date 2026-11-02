@@ -3,7 +3,7 @@ name = "gsystem-editor"
 version = "0.1.0"
 edition = "2021"
 description = "Modern librarian/editor for the TC Electronic G-System"
-license = "MIT"
+license = "GPL-3.0-or-later"
 
 [lib]
 name = "gsystem_editor_lib"

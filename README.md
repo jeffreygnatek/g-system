@@ -113,4 +113,14 @@ unit, so back up with `backup` first.
 
 ## License
 
-MIT. Not affiliated with TC Electronic / Music Tribe.
+Copyright (C) 2026 Jeff Gnatek
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See [`LICENSE`](LICENSE).
+
+In short: you may use, modify and share it, but anything you distribute that is
+built from it must also be released under the GPL with its source code.
+
+Not affiliated with TC Electronic / Music Tribe.
