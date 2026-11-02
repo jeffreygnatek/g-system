@@ -619,8 +619,14 @@ pub fn resolve_value(fp: &FieldParam, v: &SpecValue) -> Result<(i32, Option<Stri
                 return Err(if units.is_empty() {
                     bad()
                 } else {
+                    let hint = if s.contains('/') {
+                        " Note values (\"1/4\", \"1/8D\") go in the block's Tempo parameter, \
+                         which then sets this time from the preset tempo."
+                    } else {
+                        ""
+                    };
                     format!(
-                        "{name} is shown in {}, not {unit:?}; e.g. {:?}",
+                        "{name} is shown in {}, not {unit:?}; e.g. {:?}.{hint}",
                         units.join("/"),
                         fp.format((lo + hi) / 2)
                     )
