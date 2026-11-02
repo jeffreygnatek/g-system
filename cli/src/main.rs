@@ -27,6 +27,7 @@ File commands (offline):
 
 MIDI commands (<port> matches by name, e.g. \"G-System\"; in and out may differ):
   gsys ports                                list MIDI in/out ports
+  gsys usb-info                             describe the G-System's USB connection (troubleshooting)
   gsys identify <port> [<out-port>]         ask the unit for its firmware version
   gsys globals <port>                       read global settings and footswitch assignments
   gsys monitor <port>                       print every G-System message received
@@ -142,6 +143,7 @@ fn main() {
                 }
             );
         }
+        "usb-info" => print!("{}", gsystem_usb::describe()),
         "show" => {
             let bank = load_any(Path::new(a(1)));
             let slot: usize = a(2).parse().unwrap_or_else(|_| usage());

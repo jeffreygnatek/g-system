@@ -173,9 +173,11 @@ fn connect() -> Result<Shared, String> {
     handle.claim_interface(iface).map_err(|e| {
         format!("cannot claim the G-System's USB interface ({e}). Is another app (or another copy of this one) using it?")
     })?;
-    if setting != 0 {
-        let _ = handle.set_alternate_setting(iface, setting);
-    }
+    // The endpoints exist only in the alternate setting that lists them; on
+    // macOS libusb reports "entity not found" for writes otherwise.
+    handle.set_alternate_setting(iface, setting).map_err(|e| {
+        format!("cannot select the G-System's USB MIDI setting {setting} on interface {iface}: {e}")
+    })?;
     let shared = Shared {
         handle,
         iface,
@@ -227,6 +229,91 @@ fn spawn_reader(shared: &Arc<Shared>) -> Result<(), String> {
         })
         .map_err(|e| format!("cannot start the USB reader: {e}"))?;
     Ok(())
+}
+
+/// A human-readable dump of the unit's USB configuration, for troubleshooting.
+pub fn describe() -> String {
+    let mut out = String::new();
+    let ctx = match Context::new() {
+        Ok(c) => c,
+        Err(e) => return format!("USB is not available: {e}"),
+    };
+    let Ok(list) = ctx.devices() else {
+        return "cannot list USB devices".into();
+    };
+    for d in list.iter() {
+        let Ok(dd) = d.device_descriptor() else {
+            continue;
+        };
+        if dd.vendor_id() != TC_VENDOR {
+            continue;
+        }
+        out += &format!(
+            "device {:04x}:{:04x} bus {} addr {} · {} configuration(s)\n",
+            dd.vendor_id(),
+            dd.product_id(),
+            d.bus_number(),
+            d.address(),
+            dd.num_configurations()
+        );
+        match d.open() {
+            Ok(h) => {
+                out += &format!(
+                    "  open: ok · active configuration: {:?}\n",
+                    h.active_configuration()
+                )
+            }
+            Err(e) => out += &format!("  open: {e}\n"),
+        }
+        for c in 0..dd.num_configurations() {
+            let Ok(cfg) = d.config_descriptor(c) else {
+                continue;
+            };
+            out += &format!(
+                "  config {} ({} interfaces)\n",
+                cfg.number(),
+                cfg.num_interfaces()
+            );
+            for iface in cfg.interfaces() {
+                for alt in iface.descriptors() {
+                    out += &format!(
+                        "    interface {} alt {} class {} subclass {} protocol {} · {} endpoint(s)\n",
+                        alt.interface_number(), alt.setting_number(), alt.class_code(),
+                        alt.sub_class_code(), alt.protocol_code(), alt.num_endpoints()
+                    );
+                    for ep in alt.endpoint_descriptors() {
+                        out += &format!(
+                            "      endpoint 0x{:02x} {:?} {:?} max {} interval {}\n",
+                            ep.address(),
+                            ep.direction(),
+                            ep.transfer_type(),
+                            ep.max_packet_size(),
+                            ep.interval()
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        out = "No TC Electronic USB device found.\n".into();
+    }
+    match open() {
+        Ok((u, _rx)) => {
+            let s = &u.shared;
+            out += &format!(
+                "claimed interface {} · out endpoint 0x{:02x} ({}, {} bytes) · in endpoint 0x{:02x} ({})\n",
+                s.iface, s.ep_out, if s.out_bulk { "bulk" } else { "interrupt" }, s.out_packet,
+                s.ep_in, if s.in_bulk { "bulk" } else { "interrupt" }
+            );
+            match u.send(&[0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7]) {
+                Ok(()) => out += "test write (device inquiry): ok\n",
+                Err(e) => out += &format!("test write (device inquiry): {e}\n"),
+            }
+        }
+        Err(e) => out += &format!("open for MIDI: {e}\n"),
+    }
+    out
 }
 
 /// USB-MIDI 1.0 event packets for one SysEx message, on cable 0.
