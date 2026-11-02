@@ -1,5 +1,6 @@
-//! A bank of preset slots. The unit has 200 slots: 0..100 factory, 100..200
-//! user (20 banks × 5 presets each half).
+//! The unit's user bank: 200 slots, 40 banks × 5 presets. On the wire slot
+//! `n` is preset number `n + 100`; the factory bank (0..100) is read-only on
+//! the unit and is not part of this model.
 
 use crate::preset::{slot_label, Preset};
 

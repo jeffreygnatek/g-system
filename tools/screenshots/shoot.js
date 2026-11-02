@@ -39,8 +39,11 @@ const server = http.createServer((req, res) => {
     const label = (i) => `${String(Math.floor(i / 5)).padStart(2, "0")}-${(i % 5) + 1}`;
     const slots = Array.from({ length: 200 }, (_, i) => ({ index: i, label: label(i), name: null }));
     for (const p of factory) slots[p.slot].name = p.name;
-    // two slots marked edited, to show the unsynced indicator
-    const bank = { path: "/Users/jeff/G-System/Factory_Set.SQS", occupied: factory.length, dirty: [32, 61], slots };
+    // Before "connect" the bank is empty, as on a real first launch. After the
+    // (mocked) read, two slots are marked edited to show the changed indicator.
+    const empty = { path: null, occupied: 0, dirty: [], slots: slots.map((s) => ({ ...s, name: null })) };
+    const loaded = { path: "/Users/jeff/G-System/Factory_Set.SQS", occupied: factory.length, dirty: [32, 61], slots };
+    let bank = empty;
     window.__TAURI_INTERNALS__ = {
       transformCallback: () => 0,
       invoke: async (cmd, args) => {
@@ -50,8 +53,9 @@ const server = http.createServer((req, res) => {
             const p = factory.find((x) => x.slot === args.index);
             return { index: p.slot, label: p.label, name: p.name, params_i24: p.params_i24, raw_hex: p.raw_hex };
           }
-          case "midi_ports": return { inputs: ["UM-ONE"], outputs: ["UM-ONE"] };
-          case "midi_backup": return factory.map((p) => p.slot);
+          case "midi_ports": return { inputs: ["G-System"], outputs: ["G-System"] };
+          case "midi_identify": return "01 00 04 02";
+          case "midi_backup": bank = loaded; return factory.map((p) => p.slot);
           default: return null;
         }
       },

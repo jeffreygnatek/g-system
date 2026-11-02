@@ -19,7 +19,7 @@ let dragFrom: number | null = null;
 let ports: Ports = { inputs: [], outputs: [] };
 let portIn = "";
 let portOut = "";
-let unit: { connected: boolean; progress?: string } = { connected: false };
+let unit: { connected: boolean; progress?: string; version?: string } = { connected: false };
 let focusBlock: string | null = null;
 let status = "";
 let statusErr = false;
@@ -87,19 +87,31 @@ async function doSave() {
 async function loadPorts() {
   try {
     ports = await invoke<Ports>("midi_ports");
-    portIn ||= ports.inputs.find((p) => /um-one|g-system/i.test(p)) ?? ports.inputs[0] ?? "";
-    portOut ||= ports.outputs.find((p) => /um-one|g-system/i.test(p)) ?? ports.outputs[0] ?? "";
+    portIn ||= ports.inputs.find((p) => /g-system/i.test(p)) ?? ports.inputs.find((p) => /um-one|midi/i.test(p)) ?? ports.inputs[0] ?? "";
+    portOut ||= ports.outputs.find((p) => /g-system/i.test(p)) ?? ports.outputs.find((p) => /um-one|midi/i.test(p)) ?? ports.outputs[0] ?? "";
   } catch (e) {
     setStatus(String(e), true);
   }
   render();
 }
+async function identify(): Promise<boolean> {
+  try {
+    const v = await invoke<string>("midi_identify", { input: portIn, output: portOut });
+    unit = { connected: true, version: v };
+    return true;
+  } catch (e) {
+    unit = { connected: false };
+    setStatus(String(e), true);
+    return false;
+  }
+}
 async function midiBackup(from: number, to: number) {
-  unit.progress = `Reading slots ${from}–${to}…`;
+  const n = to - from + 1;
+  unit.progress = `Reading ${n} slot${n === 1 ? "" : "s"} (about ${Math.ceil((n * 0.8) / 60)} min)…`;
   render();
   try {
     const got = await invoke<number[]>("midi_backup", { input: portIn, output: portOut, from, to });
-    unit = { connected: got.length > 0 };
+    unit = { ...unit, connected: true, progress: undefined };
     await refresh();
     setStatus(got.length ? `Received ${got.length} presets` : "No response from unit", !got.length);
   } catch (e) {
@@ -108,6 +120,7 @@ async function midiBackup(from: number, to: number) {
   }
   render();
 }
+const WRITE_DISABLED = "Writing to the unit is disabled for now: the store sequence can freeze the G-System (see PROTOCOL.md). Save a .syx instead.";
 async function midiSend(from: number, to: number) {
   try {
     const n = await invoke<number>("midi_send", { output: portOut, from, to });
@@ -164,7 +177,7 @@ function strip(): string {
   const s = selected != null ? bank.slots[selected] : null;
   const bankNo = selected != null ? Math.floor(selected / 5) : null;
   const sw = [1, 2, 3, 4, 5].map((n) => `<span class="fsw ${selected != null && selected % 5 === n - 1 ? "on" : ""}">${n}</span>`).join("");
-  const tags = BLOCKS.filter((b) => b.types.length || b.id === "boost")
+  const tags = BLOCKS.filter((b) => b.types.length || b.id === "eq" || b.id === "boost")
     .map((b) => { const on = blockOn(b); return `<span class="tag ${on ? "on" : ""}">${esc(b.name.toUpperCase())}</span>`; })
     .join("");
   return `<section class="strip" aria-label="Unit status">
@@ -204,8 +217,8 @@ function banksView(): string {
         <div class="seg"><button class="${half === 0 ? "on" : ""}" data-half="0">Banks 00–19</button><button class="${half === 1 ? "on" : ""}" data-half="1">Banks 20–39</button></div>
         <span class="dim">${defined} of 200 defined</span>
         <div class="right">
-          <button class="btn sm" id="getall" ${unit.connected ? "" : "disabled"}>Get from unit</button>
-          <button class="btn sm amber" id="syncdirty" ${unit.connected && bank.dirty.length ? "" : "disabled"}>Sync ${bank.dirty.length || ""} changed →</button>
+          <button class="btn sm" id="getall" ${unit.connected ? "" : "disabled"}>Read all from unit</button>
+          <button class="btn sm amber" id="syncdirty" disabled title="${WRITE_DISABLED}">Sync ${bank.dirty.length || ""} changed →</button>
         </div>
       </div>
       <div class="gridwrap">
@@ -222,14 +235,14 @@ function inspector(): string {
   if (!s || s.name == null || !detail) {
     return `<aside class="inspector"><div class="eyebrow">Preset</div><div class="note">Select a slot to see what's in it. Double-click a name to rename, drag to move.</div>${unitPanel()}</aside>`;
   }
-  const mini = BLOCKS.filter((b) => b.types.length).map((b) => {
+  const mini = BLOCKS.filter((b) => b.types.length || b.id === "eq").map((b) => {
     const on = blockOn(b);
-    return `<div class="${on ? "on" : ""}"><div class="k">${esc(b.name)}</div><div class="v">${on === null ? "—" : on ? esc(blockType(b)) : "Off"}</div></div>`;
+    return `<div class="${on ? "on" : ""}"><div class="k">${esc(b.name)}</div><div class="v">${on === null ? "—" : on ? esc(blockType(b) || "On") : "Off"}</div></div>`;
   }).join("");
   const dirty = dirtySet().has(selected!);
   return `<aside class="inspector">
     <div>
-      <div class="eyebrow mono" style="margin-bottom:6px">${s.label} · ${selected! < 100 ? "FACTORY" : "USER"} BANK</div>
+      <div class="eyebrow mono" style="margin-bottom:6px">${s.label} · USER BANK</div>
       <label for="pname" style="position:absolute;left:-9999px">Preset name</label>
       <input id="pname" class="pname" value="${esc(s.name)}" maxlength="20">
       <div style="display:flex;justify-content:space-between;font-size:11px;margin-top:6px" class="dim"><span>${s.name.length} / 20 characters</span>${dirty ? `<span style="color:var(--amber)">Edited</span>` : ""}</div>
@@ -241,8 +254,8 @@ function inspector(): string {
     <div style="display:flex;flex-direction:column;gap:8px">
       <button class="btn primary" id="edit" style="height:38px;border-radius:8px">Edit preset</button>
       <div class="actions2">
-        <button class="btn" id="audition" ${unit.connected ? "" : "disabled"}>Audition on unit</button>
-        <button class="btn" id="syncone" ${unit.connected ? "" : "disabled"}>Sync this slot</button>
+        <button class="btn" id="readone" ${unit.connected ? "" : "disabled"}>Re-read from unit</button>
+        <button class="btn" id="syncone" disabled title="${WRITE_DISABLED}">Sync this slot</button>
         <button class="btn" id="copyto">Copy to…</button>
         <button class="btn" id="clear" style="color:var(--text-2)">Clear slot</button>
       </div>
@@ -256,7 +269,7 @@ function unitPanel(): string {
   }
   const d = bank.dirty;
   const list = d.slice(0, 6).map((i) => bank.slots[i].label).join(", ") + (d.length > 6 ? ", …" : "");
-  return `<div class="note" style="margin-top:auto"><b>Unit vs. file</b>${d.length ? `${d.length} preset(s) differ from the unit (${list}). Nothing is written to the G-System until you press Sync.` : "In sync with the unit."}</div>`;
+  return `<div class="note" style="margin-top:auto"><b>Unit vs. file</b>${d.length ? `${d.length} preset(s) changed here (${list}). Writing to the unit is disabled for now, so save a .syx to keep them.` : "Matches what was read from the unit."}</div>`;
 }
 
 // ---------------------------------------------------------------- preset view
@@ -291,7 +304,9 @@ function blockCard(b: Block): string {
     : `<span style="margin-left:auto"></span>`;
   return `<section class="card ${on === false ? "off" : ""} ${focusBlock === b.id ? "focus" : ""}" id="card-${b.id}" aria-label="${esc(b.title)}">
     <div class="hd"><span class="ttl">${esc(b.title)}${b.enabledIndex == null ? unmapTag("on/off unmapped") : ""}</span>${typeSel}<button class="toggle ${on ? "on" : ""}" data-toggle="${b.enabledIndex}" ${b.enabledIndex == null ? "disabled" : ""} aria-label="${on ? "On" : "Off"}"></button></div>
-    <div class="bd">${b.params.map((p) => paramRow(p, selected)).join("")}${b.tempo ? tempoChips() : ""}</div>
+    <div class="bd">${b.params.every((p) => p.index == null)
+      ? `<div class="note">This block's parameters move with the effect type, so they aren't mapped yet. Type and on/off are.</div>`
+      : b.params.map((p) => paramRow(p, selected)).join("") + (b.tempo ? tempoChips() : "")}</div>
   </section>`;
 }
 function routingCard(): string {
@@ -319,11 +334,10 @@ function presetView(): string {
     const on = blockOn(b);
     return `<button class="tile ${on ? "on" : ""} ${focusBlock === b.id ? "focus" : ""}" data-block="${b.id}"><span class="t">${esc(b.name)}<i></i></span><span class="s">${esc(blockType(b) || (on === null ? "—" : on ? "On" : "Off"))}</span></button>`;
   }).join("");
-  const cards = BLOCKS.filter((b) => b.types.length || b.id === "boost").map(blockCard).join("") + routingCard();
-  const mappedCount = BLOCKS.flatMap((b) => b.params).filter((p) => p.index != null).length;
+  const cards = BLOCKS.filter((b) => b.types.length || b.id === "eq").map(blockCard).join("") + routingCard();
   return `
     <section class="chain" aria-label="Signal chain">${tiles}</section>
-    ${mappedCount === 0 ? `<div class="banner">Parameter positions in the dump haven't been mapped yet, so controls are shown disabled. Values live in <span class="mono">app/src/model.ts</span>; fill in each param's <span class="mono">index</span> as PROTOCOL.md confirms it.</div>` : ""}
+    <div class="banner">Edits change this file only; sending them to the unit is disabled for now. Filter, Modulation, pitch voices, loops, insert and boost aren't mapped yet.</div>
     <main class="cards">${cards}</main>`;
 }
 
@@ -350,7 +364,7 @@ function connectView(): string {
   const opts = (list: string[], cur: string) => list.length ? list.map((p) => `<option ${p === cur ? "selected" : ""}>${esc(p)}</option>`).join("") : `<option value="">(no ports found)</option>`;
   const busy = unit.progress;
   return `<main class="body"><div class="centered"><div class="connect">
-    <div><h1>Connect your G-System</h1><p>Over 5-pin MIDI through any USB-MIDI interface. The unit's own USB port is not supported yet. You can also skip this and work with files only.</p></div>
+    <div><h1>Connect your G-System</h1><p>Plug the G-System's USB port into this computer; it shows up as a MIDI device. A USB-MIDI interface on the 5-pin jacks works too. Reading is safe; this app doesn't write to the unit yet.</p></div>
     <section class="panel">
       <div class="two">
         <div class="field"><label class="eyebrow" for="pin">MIDI in (from unit)</label><select id="pin">${opts(ports.inputs, portIn)}</select></div>
@@ -358,7 +372,8 @@ function connectView(): string {
       </div>
       <div style="display:flex;flex-direction:column;gap:10px">
         <div class="step ${ports.inputs.length ? "ok" : ""}"><span class="ic">${ports.inputs.length ? "✓" : "1"}</span><span>MIDI ports found</span><span class="r">${ports.inputs.length ? esc(portIn) : "none"}</span></div>
-        <div class="step ${unit.connected ? "ok" : busy ? "busy" : ""}"><span class="ic">${unit.connected ? "✓" : busy ? "" : "2"}</span><span>${unit.connected ? "G-System answered" : busy ? busy : "Read the user bank from the unit"}</span><span class="r">${unit.connected ? `${bank.occupied} presets` : ""}</span></div>
+        <div class="step ${unit.version ? "ok" : ""}"><span class="ic">${unit.version ? "✓" : "2"}</span><span>${unit.version ? "G-System answered" : "Identify the unit"}</span><span class="r">${unit.version ? esc(unit.version) : ""}</span></div>
+        <div class="step ${busy ? "busy" : unit.connected && bank.occupied ? "ok" : ""}"><span class="ic">${busy ? "" : unit.connected && bank.occupied ? "✓" : "3"}</span><span>${busy ? esc(busy) : "Read the 200 user presets"}</span><span class="r">${!busy && unit.connected && bank.occupied ? `${bank.occupied} presets` : ""}</span></div>
       </div>
       <div class="rowbtns">
         <button class="btn primary" id="connect" ${ports.inputs.length && !busy ? "" : "disabled"}>${busy ? "Reading…" : "Connect & read user bank"}</button>
@@ -367,7 +382,7 @@ function connectView(): string {
       </div>
       <div class="status ${statusErr ? "err" : ""}">${esc(status)}</div>
     </section>
-    <div class="note"><b>If nothing answers</b>Check both MIDI cables are crossed (interface OUT → unit IN, unit OUT → interface IN), and that no other app has the interface open. The first read of a full bank takes a few minutes.</div>
+    <div class="note"><b>If nothing answers</b>Pick the G-System's own ports in both lists, and close any other app that has them open. With a 5-pin interface, cross the cables (interface OUT → unit IN, unit OUT → interface IN). Empty slots don't answer, so a new unit reads as mostly empty.</div>
   </div></div></main>`;
 }
 
@@ -385,17 +400,17 @@ function wire() {
   on("save", doSave);
   document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((b) => (b.onclick = () => go(b.dataset.view as View)));
   document.querySelectorAll<HTMLButtonElement>("[data-half]").forEach((b) => (b.onclick = () => { half = Number(b.dataset.half) as 0 | 1; render(); }));
-  on("getall", () => midiBackup(100, 199));
+  on("getall", () => midiBackup(0, 199));
   on("syncdirty", syncDirty);
   on("edit", () => go("preset"));
-  on("audition", () => selected != null && midiSend(selected, selected));
+  on("readone", () => selected != null && midiBackup(selected, selected));
   on("syncone", () => selected != null && midiSend(selected, selected));
   on("clear", async () => { if (selected != null) await refresh(await invoke<BankView>("clear_slot", { index: selected })); });
   on("copyto", () => setStatus("Drag the preset to a slot while holding ⌥ to copy it"));
   on("toconnect", () => go("connect"));
   on("offline", () => (bank.occupied ? go("banks") : doOpen()));
   on("rescan", loadPorts);
-  on("connect", async () => { await midiBackup(100, 199); if (unit.connected) go("banks"); });
+  on("connect", async () => { if (await identify()) { await midiBackup(0, 199); go("banks"); } else render(); });
   const pin = document.getElementById("pin") as HTMLSelectElement | null;
   const pout = document.getElementById("pout") as HTMLSelectElement | null;
   if (pin) pin.onchange = () => (portIn = pin.value);

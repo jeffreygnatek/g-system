@@ -191,8 +191,84 @@ fn midi_ports() -> Result<Ports, String> {
     })
 }
 
-/// Request slots `from..=to` from the unit and merge them into the open bank.
-/// Returns the slot indices that answered.
+/// One open in/out pair, with incoming bytes reassembled into whole SysEx messages.
+struct Midi {
+    _in: midir::MidiInputConnection<()>,
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    out: midir::MidiOutputConnection,
+}
+
+impl Midi {
+    fn open(input: &str, output: &str) -> Result<Midi, String> {
+        let mut inp = midir::MidiInput::new("gsystem-editor").map_err(|e| e.to_string())?;
+        inp.ignore(midir::Ignore::None);
+        let in_port = inp
+            .ports()
+            .into_iter()
+            .find(|p| inp.port_name(p).map(|n| n == input).unwrap_or(false))
+            .ok_or("input port not found")?;
+        let out = midir::MidiOutput::new("gsystem-editor").map_err(|e| e.to_string())?;
+        let out_port = out
+            .ports()
+            .into_iter()
+            .find(|p| out.port_name(p).map(|n| n == output).unwrap_or(false))
+            .ok_or("output port not found")?;
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let mut buf = Vec::new();
+        let conn = inp
+            .connect(
+                &in_port,
+                "in",
+                move |_, bytes, _| {
+                    for &b in bytes {
+                        if b == 0xF0 {
+                            buf.clear();
+                        }
+                        if !buf.is_empty() || b == 0xF0 {
+                            buf.push(b);
+                            if b == 0xF7 {
+                                let _ = tx.send(std::mem::take(&mut buf));
+                            }
+                        }
+                    }
+                },
+                (),
+            )
+            .map_err(|e| e.to_string())?;
+        let out = out.connect(&out_port, "out").map_err(|e| e.to_string())?;
+        Ok(Midi { _in: conn, rx, out })
+    }
+
+    fn wait<T>(&self, timeout: Duration, mut pick: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
+        let deadline = Instant::now() + timeout;
+        while let Ok(b) = self
+            .rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            if let Some(v) = pick(&b) {
+                return Some(v);
+            }
+        }
+        None
+    }
+}
+
+/// Ask the unit to identify itself (Universal Device Inquiry).
+#[tauri::command]
+fn midi_identify(input: String, output: String) -> Result<String, String> {
+    let mut m = Midi::open(&input, &output)?;
+    m.out
+        .send(&gsystem_protocol::sysex::DEVICE_INQUIRY)
+        .map_err(|e| e.to_string())?;
+    m.wait(
+        Duration::from_millis(1500),
+        gsystem_protocol::sysex::parse_identity,
+    )
+    .ok_or_else(|| "No G-System answered on these ports".to_string())
+}
+
+/// Read user slots `from..=to` from the unit into the open bank.
+/// Returns the slots that answered. Empty slots never answer.
 #[tauri::command]
 fn midi_backup(
     input: String,
@@ -201,80 +277,37 @@ fn midi_backup(
     to: usize,
     state: State<AppState>,
 ) -> Result<Vec<usize>, String> {
-    let mut inp = midir::MidiInput::new("gsystem-editor").map_err(|e| e.to_string())?;
-    inp.ignore(midir::Ignore::None);
-    let in_port = inp
-        .ports()
-        .into_iter()
-        .find(|p| inp.port_name(p).map(|n| n == input).unwrap_or(false))
-        .ok_or("input port not found")?;
-    let out = midir::MidiOutput::new("gsystem-editor").map_err(|e| e.to_string())?;
-    let out_port = out
-        .ports()
-        .into_iter()
-        .find(|p| out.port_name(p).map(|n| n == output).unwrap_or(false))
-        .ok_or("output port not found")?;
-    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-    let _conn_in = inp
-        .connect(
-            &in_port,
-            "in",
-            move |_, bytes, _| {
-                let _ = tx.send(bytes.to_vec());
-            },
-            (),
-        )
-        .map_err(|e| e.to_string())?;
-    let mut conn_out = out.connect(&out_port, "out").map_err(|e| e.to_string())?;
-
+    let mut m = Midi::open(&input, &output)?;
     let mut got = Vec::new();
     for slot in from..=to.min(199) {
-        conn_out
-            .send(&Message::preset_request(0, slot as u8).encode())
+        while m.rx.try_recv().is_ok() {}
+        m.out
+            .send(&Message::preset_request(0, slot).encode())
             .map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + Duration::from_millis(3500);
-        while let Ok(bytes) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            if let Ok(Message::PresetDump { data, .. }) = Message::parse(&bytes) {
-                if let Some(p) = Preset::from_raw(data) {
-                    state.bank.lock().unwrap().set(slot, p);
-                    state.dirty.lock().unwrap().remove(&slot);
-                    got.push(slot);
-                }
-                break;
+        let want = gsystem_protocol::sysex::slot_to_number(slot);
+        // A stored preset answers in ~0.77 s.
+        let p = m.wait(Duration::from_millis(1100), |b| match Message::parse(b) {
+            Ok(Message::PresetDump { number, data, .. }) if number == want => {
+                Preset::from_raw(data)
             }
+            _ => None,
+        });
+        if let Some(p) = p {
+            state.bank.lock().unwrap().set(slot, p);
+            state.dirty.lock().unwrap().remove(&slot);
+            got.push(slot);
         }
-        std::thread::sleep(Duration::from_millis(2000)); // editor's recorded settle time
     }
     Ok(got)
 }
 
-/// Send the occupied slots in `from..=to` to the unit.
+/// Writing presets to the unit is disabled in the app: the store sequence the
+/// original editor uses has been observed to freeze G-System units
+/// intermittently. The CLI's `gsys store` can do it, with a read-back check,
+/// for people who accept that risk. See PROTOCOL.md "Storing presets".
 #[tauri::command]
-fn midi_send(
-    output: String,
-    from: usize,
-    to: usize,
-    state: State<AppState>,
-) -> Result<usize, String> {
-    let out = midir::MidiOutput::new("gsystem-editor").map_err(|e| e.to_string())?;
-    let out_port = out
-        .ports()
-        .into_iter()
-        .find(|p| out.port_name(p).map(|n| n == output).unwrap_or(false))
-        .ok_or("output port not found")?;
-    let mut conn = out.connect(&out_port, "out").map_err(|e| e.to_string())?;
-    let bank = state.bank.lock().unwrap();
-    let mut n = 0;
-    for slot in from..=to.min(199) {
-        if let Some(p) = bank.get(slot) {
-            conn.send(&p.to_message(0, slot as u8).encode())
-                .map_err(|e| e.to_string())?;
-            state.dirty.lock().unwrap().remove(&slot);
-            n += 1;
-            std::thread::sleep(Duration::from_millis(150));
-        }
-    }
-    Ok(n)
+fn midi_send(_output: String, _from: usize, _to: usize) -> Result<usize, String> {
+    Err("Writing presets to the unit is disabled for now: the store sequence can freeze the G-System. Save a .syx instead; see PROTOCOL.md.".into())
 }
 
 pub fn run() {
@@ -294,6 +327,7 @@ pub fn run() {
             set_param,
             slot_detail,
             midi_ports,
+            midi_identify,
             midi_backup,
             midi_send
         ])

@@ -4,9 +4,20 @@ A modern, cross-platform (macOS / Linux / Windows) librarian and editor for the
 TC Electronic G-System, replacing the 2008 Vyzor-based editor that no longer
 runs on current operating systems.
 
-Status: **offline librarian works; MIDI transport is written but untested on
-hardware.** See `PROTOCOL.md` for what is known and what still needs a live
-capture.
+> **Looking for a working editor today?** An independent project,
+> [G-System Editor by David Avalanches](https://davidavalanches.github.io/gsystem-editor/)
+> ([source](https://github.com/davidavalanches/gsystem-editor), GPL-3.0), has been
+> tested on real hardware and runs on macOS, Linux and Android. This repo started
+> separately and now builds on facts that project published (credited in
+> `PROTOCOL.md`).
+
+Status: **reading works; writing to the unit is disabled.** Banks and presets
+load from `.SQS`/`.syx` files and from the unit over MIDI. The unit's own USB
+port shows up as a MIDI device, so no interface is needed. Preset parameters are
+mapped for Comp, Pitch, Reverb, Gate, Delay and EQ, and every block's type and
+on/off is decoded. Storing presets is turned off in the app because the
+store sequence the original editor uses can freeze the G-System; see
+`PROTOCOL.md` → "Storing presets".
 
 ```
 crates/gsystem-protocol   SysEx codec, preset/bank model, .SQS/.Prs/.syx parsers (no I/O deps)
@@ -25,7 +36,8 @@ inspector for the selected preset. Amber dots mark slots that differ from the un
 ![Banks view](docs/screenshots/banks.png)
 
 **Preset** — the signal chain in audio order, then one card per effect block.
-Controls activate as the parameter map in `app/src/model.ts` is filled in.
+Parameters come from the field map in `PROTOCOL.md`; Filter and Modulation
+parameters are still to be mapped.
 
 ![Preset view](docs/screenshots/preset.png)
 
@@ -75,33 +87,29 @@ npm run tauri build                          # .app / .deb / .msi
 ```
 gsys list <file>                 slots and names from .SQS / .syx / .Prs
 gsys export <in.SQS> <out.syx>   plain SysEx dump of all occupied slots
-gsys json <file>                 names + 165 int24 params per preset
+gsys json <file>                 names + 165 int24 fields per preset
 gsys scripts <file.Prs>          SysEx the old editor sent/expected for that preset
 gsys rename <in.syx> <slot> "<name>" <out.syx>
 
 gsys ports
-gsys monitor <in-port>
-gsys request <in-port> <out-port> <slot>
-gsys backup  <in-port> <out-port> <out.syx> [from] [to]
-gsys send    <in-port> <out-port> <file.syx>
-gsys raw     <out-port> "F0 00 20 1F 00 55 57 01 F7"
+gsys identify <port>             firmware version, via Device Inquiry
+gsys monitor <port>
+gsys request <port> <slot>
+gsys backup  <port> <out.syx> [from] [to]
+gsys raw     <port> "F0 7E 7F 06 01 F7"
+gsys store   <port> <file.syx> <file-slot> <unit-slot> --sysex-id <n> --i-accept-the-risk
 ```
 
-Port names match by substring (`gsys ports` shows them). Slots are 0-based:
-0–99 factory, 100–199 user.
+Port names match by substring (`gsys ports` lists them; usually "G-System").
+Slots are 0-based user slots: 0 = 00-1 … 199 = 39-5. `store` can freeze the
+unit, so back up with `backup` first.
 
 ## First session with the unit
 
-1. Connect a USB-MIDI interface to the G-System's MIDI IN and OUT.
-2. `gsys ports`, then `gsys monitor "<in>"` in one terminal.
-3. Change presets on the unit with the footswitches; note what, if anything,
-   it sends.
-4. `gsys request "<in>" "<out>" 100` — this sends the editor's `22 01` select
-   message and waits for a `20` dump. If nothing comes back, try
-   `gsys raw "<out>" "F0 00 20 1F 00 55 57 00 F7"` first (edit mode) and watch
-   the monitor; the answers to the open questions in `PROTOCOL.md` fall out of
-   this session.
-5. Once `request` works, `gsys backup … user.syx 100 199` backs up the user bank.
+1. Connect the G-System's USB port to the computer (or a USB-MIDI interface to its 5-pin jacks).
+2. `gsys ports`, then `gsys identify G-System`.
+3. `gsys backup G-System my-unit.syx` reads all 200 user slots (about 2½ minutes; empty slots are skipped).
+4. Open `my-unit.syx` in the app, or use the app's Connect screen to do the same thing.
 
 ## License
 

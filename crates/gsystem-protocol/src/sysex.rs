@@ -5,8 +5,12 @@
 //! F0 00 20 1F <dev> 55 <type> <payload...> F7
 //! ```
 //! `00 20 1F` is TC Electronic's manufacturer ID, `0x55` is the G-System model
-//! ID (the G-Major uses `0x48`). `<dev>` is `0x00` for a specific unit or
-//! `0x7F` for "any device" (the editor uses both).
+//! ID (the G-Major uses `0x48`). `<dev>` is the unit's SysEx ID (set in
+//! Global › MIDI) or `0x7F` for "any device".
+//!
+//! Message meanings follow the hardware observations published by the
+//! independent `davidavalanches/gsystem-editor` project (see PROTOCOL.md);
+//! this file is our own implementation of those facts.
 
 use std::fmt;
 
@@ -18,28 +22,47 @@ pub const DEVICE_ANY: u8 = 0x7F;
 
 /// Message type byte (offset 6).
 pub mod msg {
-    /// Preset dump: `20 01 00 <preset#> <1032 nibbles> <chk>`.
+    /// Preset dump: `20 01 <num:2> <1032 nibbles> <chk>`.
     pub const PRESET_DUMP: u8 = 0x20;
-    /// Request / select family. Observed sub-forms:
-    /// `22 01 00 <n> 00 00 00 00 00 01` (17 bytes, preset request/select),
-    /// `22 05 ...` (global/system data), `22 0D`/`22 0E` (routing tables).
-    pub const REQUEST: u8 = 0x22;
-    /// Parameter edit: `47 <block> <param> <lo> <hi>`-ish, 13 bytes total.
-    pub const PARAM: u8 = 0x47;
-    /// Firmware updater: enter/leave bootloader (`51 01`).
+    /// Set one edit-buffer parameter: `22 <block> <param:2> <value:6 nibbles>`.
+    /// The unit also sends these when a footswitch or knob is used.
+    pub const SET_PARAM: u8 = 0x22;
+    /// The unit's answer for a damaged slot: `28 <num:2> 00 01`.
+    pub const CORRUPT_PRESET: u8 = 0x28;
+    /// Request a stored preset (read-only): `45 01 <num:2>`.
+    pub const REQUEST_PRESET: u8 = 0x45;
+    /// Request parameters: `47 <block> <first:2> <count:2>`, answered with `22` messages.
+    pub const REQUEST_PARAMS: u8 = 0x47;
+    /// Firmware updater: enter/leave bootloader.
     pub const FW_CONTROL: u8 = 0x51;
     /// Firmware data block (305 bytes).
     pub const FW_BLOCK: u8 = 0x52;
-    /// Edit mode on/off: `57 00` / `57 01`.
-    pub const EDIT_MODE: u8 = 0x57;
+    /// Bracket around a preset store: `57 00` begin, `57 01` end.
+    pub const TRANSFER: u8 = 0x57;
 }
 
+/// Preset numbers on the wire: user slot 0 is preset 100.
+pub const USER_PRESET_BASE: u16 = 100;
 /// Number of nibble bytes in a preset dump payload (516 data bytes × 2).
 pub const PRESET_NIBBLES: usize = 1032;
 /// Decoded preset payload size in bytes.
 pub const PRESET_BYTES: usize = PRESET_NIBBLES / 2;
 /// Total framed length of a preset dump message.
 pub const PRESET_DUMP_LEN: usize = 10 + PRESET_NIBBLES + 2;
+/// Universal MIDI Device Inquiry (answered with the firmware version).
+pub const DEVICE_INQUIRY: [u8; 6] = [0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7];
+
+/// Wire preset number for user slot `slot` (0..200).
+pub fn slot_to_number(slot: usize) -> u16 {
+    USER_PRESET_BASE + slot as u16
+}
+/// User slot for a wire preset number, if it is a user preset.
+pub fn number_to_slot(number: u16) -> Option<usize> {
+    number
+        .checked_sub(USER_PRESET_BASE)
+        .map(|s| s as usize)
+        .filter(|&s| s < 200)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SysexError {
@@ -110,31 +133,54 @@ pub fn from_nibbles(nibbles: &[u8]) -> Result<Vec<u8>, SysexError> {
     Ok(out)
 }
 
+fn u14(hi: u8, lo: u8) -> u16 {
+    ((hi as u16 & 0x7F) << 7) | (lo as u16 & 0x7F)
+}
+fn split14(v: u16) -> [u8; 2] {
+    [((v >> 7) & 0x7F) as u8, (v & 0x7F) as u8]
+}
+/// Signed 24-bit value as six nibbles, most significant first.
+fn i24_nibbles(v: i32) -> [u8; 6] {
+    let raw = (v as u32) & 0xFF_FFFF;
+    [20, 16, 12, 8, 4, 0].map(|s| ((raw >> s) & 0x0F) as u8)
+}
+fn nibbles_i24(n: &[u8]) -> i32 {
+    let raw = n
+        .iter()
+        .fold(0u32, |acc, &x| (acc << 4) | (x as u32 & 0x0F));
+    ((raw << 8) as i32) >> 8
+}
+
 /// A parsed G-System message. `Unknown` keeps the raw payload so nothing is lost.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
+    /// `20 01 <num:2> …` — a full preset. `number` is the wire number (user slot + 100).
     PresetDump {
         device: u8,
-        preset: u8,
+        number: u16,
         data: Vec<u8>,
     },
-    EditMode {
-        device: u8,
-        on: bool,
-    },
-    /// `22 01 00 <n> ...` — select/request preset `n`.
-    PresetRequest {
-        device: u8,
-        preset: u8,
-        tail: Vec<u8>,
-    },
-    /// `47 <block> <param> <value bytes...>`
-    Param {
+    /// `45 01 <num:2>` — ask the unit for a stored preset.
+    PresetRequest { device: u8, number: u16 },
+    /// `22 <block> <param:2> <value:6 nibbles>` — one edit-buffer parameter.
+    /// A message from the unit may carry several consecutive values; see `values`.
+    SetParam {
         device: u8,
         block: u8,
-        param: u8,
-        raw: Vec<u8>,
+        param: u16,
+        values: Vec<i32>,
     },
+    /// `47 <block> <first:2> <count:2>` — ask for parameters `first..first+count`.
+    RequestParams {
+        device: u8,
+        block: u8,
+        first: u16,
+        count: u16,
+    },
+    /// `57 00` / `57 01` — begin / end a preset store.
+    Transfer { device: u8, begin: bool },
+    /// `28 <num:2> 00 01` — the unit reports a damaged slot.
+    CorruptPreset { device: u8, number: u16 },
     Unknown {
         device: u8,
         kind: u8,
@@ -159,12 +205,11 @@ impl Message {
         }
         let device = bytes[4];
         let kind = bytes[6];
-        let payload = &bytes[7..bytes.len() - 1];
+        let p = &bytes[7..bytes.len() - 1];
         Ok(match kind {
-            msg::PRESET_DUMP if payload.len() == PRESET_NIBBLES + 4 && payload[0] == 0x01 => {
-                let preset = payload[2];
-                let nibbles = &payload[3..3 + PRESET_NIBBLES];
-                let chk = payload[3 + PRESET_NIBBLES];
+            msg::PRESET_DUMP if p.len() == PRESET_NIBBLES + 4 && p[0] == 0x01 => {
+                let nibbles = &p[3..3 + PRESET_NIBBLES];
+                let chk = p[3 + PRESET_NIBBLES];
                 let calc = nibble_checksum(nibbles);
                 if chk != calc {
                     return Err(SysexError::BadChecksum {
@@ -174,29 +219,38 @@ impl Message {
                 }
                 Message::PresetDump {
                     device,
-                    preset,
+                    number: u14(p[1], p[2]),
                     data: from_nibbles(nibbles)?,
                 }
             }
-            msg::EDIT_MODE if payload.len() == 1 => Message::EditMode {
+            msg::REQUEST_PRESET if p.len() == 3 && p[0] == 0x01 => Message::PresetRequest {
                 device,
-                on: payload[0] != 0,
+                number: u14(p[1], p[2]),
             },
-            msg::REQUEST if payload.len() >= 3 && payload[0] == 0x01 => Message::PresetRequest {
+            msg::SET_PARAM if p.len() >= 9 && (p.len() - 3) % 6 == 0 => Message::SetParam {
                 device,
-                preset: payload[2],
-                tail: payload[3..].to_vec(),
+                block: p[0],
+                param: u14(p[1], p[2]),
+                values: p[3..].chunks_exact(6).map(nibbles_i24).collect(),
             },
-            msg::PARAM if payload.len() >= 2 => Message::Param {
+            msg::REQUEST_PARAMS if p.len() == 5 => Message::RequestParams {
                 device,
-                block: payload[0],
-                param: payload[1],
-                raw: payload[2..].to_vec(),
+                block: p[0],
+                first: u14(p[1], p[2]),
+                count: u14(p[3], p[4]),
+            },
+            msg::TRANSFER if p.len() == 1 => Message::Transfer {
+                device,
+                begin: p[0] == 0,
+            },
+            msg::CORRUPT_PRESET if p.len() == 4 => Message::CorruptPreset {
+                device,
+                number: u14(p[0], p[1]),
             },
             _ => Message::Unknown {
                 device,
                 kind,
-                payload: payload.to_vec(),
+                payload: p.to_vec(),
             },
         })
     }
@@ -206,35 +260,53 @@ impl Message {
         let (device, kind, payload): (u8, u8, Vec<u8>) = match self {
             Message::PresetDump {
                 device,
-                preset,
+                number,
                 data,
             } => {
                 assert_eq!(data.len(), PRESET_BYTES, "preset payload must be 516 bytes");
                 let nib = to_nibbles(data);
-                let mut p = vec![0x01, 0x00, *preset];
+                let mut p = vec![0x01];
+                p.extend(split14(*number));
                 p.extend_from_slice(&nib);
                 p.push(nibble_checksum(&nib));
                 (*device, msg::PRESET_DUMP, p)
             }
-            Message::EditMode { device, on } => (*device, msg::EDIT_MODE, vec![*on as u8]),
-            Message::PresetRequest {
-                device,
-                preset,
-                tail,
-            } => {
-                let mut p = vec![0x01, 0x00, *preset];
-                p.extend_from_slice(tail);
-                (*device, msg::REQUEST, p)
+            Message::PresetRequest { device, number } => {
+                let mut p = vec![0x01];
+                p.extend(split14(*number));
+                (*device, msg::REQUEST_PRESET, p)
             }
-            Message::Param {
+            Message::SetParam {
                 device,
                 block,
                 param,
-                raw,
+                values,
             } => {
-                let mut p = vec![*block, *param];
-                p.extend_from_slice(raw);
-                (*device, msg::PARAM, p)
+                let mut p = vec![*block];
+                p.extend(split14(*param));
+                for v in values {
+                    p.extend(i24_nibbles(*v));
+                }
+                (*device, msg::SET_PARAM, p)
+            }
+            Message::RequestParams {
+                device,
+                block,
+                first,
+                count,
+            } => {
+                let mut p = vec![*block];
+                p.extend(split14(*first));
+                p.extend(split14(*count));
+                (*device, msg::REQUEST_PARAMS, p)
+            }
+            Message::Transfer { device, begin } => {
+                (*device, msg::TRANSFER, vec![if *begin { 0 } else { 1 }])
+            }
+            Message::CorruptPreset { device, number } => {
+                let mut p = split14(*number).to_vec();
+                p.extend([0x00, 0x01]);
+                (*device, msg::CORRUPT_PRESET, p)
             }
             Message::Unknown {
                 device,
@@ -253,14 +325,41 @@ impl Message {
         out
     }
 
-    /// The canonical "request preset n" message as the Vyzor editor sends it.
-    pub fn preset_request(device: u8, preset: u8) -> Message {
+    /// Request the preset in user slot `slot`.
+    pub fn preset_request(device: u8, slot: usize) -> Message {
         Message::PresetRequest {
             device,
-            preset,
-            tail: vec![0, 0, 0, 0, 0, 1],
+            number: slot_to_number(slot),
         }
     }
+
+    /// "Editor mode" on/off, as Vyzor sends it before a store (block 1, param 0x1D).
+    pub fn editor_mode(device: u8, on: bool) -> Message {
+        Message::SetParam {
+            device,
+            block: 0x01,
+            param: 0x1D,
+            values: vec![on as i32],
+        }
+    }
+}
+
+/// Firmware string from a Universal Device Inquiry reply, if it is a G-System.
+pub fn parse_identity(bytes: &[u8]) -> Option<String> {
+    // F0 7E <ch> 06 02 00 20 1F 55 <family/model…> <version…> F7
+    if bytes.len() < 12 || bytes[1] != 0x7E || bytes[3] != 0x06 || bytes[4] != 0x02 {
+        return None;
+    }
+    if bytes[5..8] != TC_MANUFACTURER || bytes[8] != MODEL_GSYSTEM {
+        return None;
+    }
+    let tail = &bytes[9..bytes.len() - 1];
+    Some(
+        tail.iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 /// Split a byte stream into framed SysEx messages, skipping anything outside F0..F7.
@@ -292,10 +391,10 @@ mod tests {
     }
 
     #[test]
-    fn edit_mode_roundtrip() {
-        let m = Message::EditMode {
+    fn transfer_roundtrip() {
+        let m = Message::Transfer {
             device: 0,
-            on: true,
+            begin: false,
         };
         let b = m.encode();
         assert_eq!(b, [0xF0, 0x00, 0x20, 0x1F, 0x00, 0x55, 0x57, 0x01, 0xF7]);
@@ -303,11 +402,50 @@ mod tests {
     }
 
     #[test]
-    fn preset_request_matches_capture() {
-        // From Twilight.Prs TRAN chunk
+    fn editor_mode_matches_vyzor_capture() {
+        // From Twilight.Prs TRAN chunk: what we first misread as a preset request.
         let cap = [
             0xF0, 0x00, 0x20, 0x1F, 0x00, 0x55, 0x22, 0x01, 0x00, 0x1D, 0, 0, 0, 0, 0, 1, 0xF7,
         ];
-        assert_eq!(Message::preset_request(0, 0x1D).encode(), cap);
+        assert_eq!(Message::editor_mode(0, true).encode(), cap);
+        assert_eq!(
+            Message::parse(&cap).unwrap(),
+            Message::SetParam {
+                device: 0,
+                block: 1,
+                param: 0x1D,
+                values: vec![1]
+            }
+        );
+    }
+
+    #[test]
+    fn preset_request_encoding() {
+        // user slot 100 → wire number 200 = 0x01 0x48 (14-bit)
+        assert_eq!(
+            Message::preset_request(0, 100).encode(),
+            [0xF0, 0x00, 0x20, 0x1F, 0x00, 0x55, 0x45, 0x01, 0x01, 0x48, 0xF7]
+        );
+    }
+
+    #[test]
+    fn set_param_negative() {
+        let m = Message::SetParam {
+            device: 0x7F,
+            block: 11,
+            param: 12,
+            values: vec![-25],
+        };
+        let b = m.encode();
+        assert_eq!(&b[10..16], &[0x0F, 0x0F, 0x0F, 0x0F, 0x0E, 0x07]);
+        assert_eq!(Message::parse(&b).unwrap(), m);
+    }
+
+    #[test]
+    fn slot_numbers() {
+        assert_eq!(slot_to_number(0), 100);
+        assert_eq!(number_to_slot(299), Some(199));
+        assert_eq!(number_to_slot(99), None);
+        assert_eq!(number_to_slot(300), None);
     }
 }

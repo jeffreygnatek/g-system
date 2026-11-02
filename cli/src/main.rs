@@ -1,12 +1,12 @@
 //! `gsys` — command-line librarian and MIDI tool for the G-System.
 //!
-//! File commands work offline. MIDI commands use any class-compliant
-//! USB-MIDI interface wired to the unit's 5-pin DIN jacks.
+//! File commands work offline. MIDI commands work over the G-System's own
+//! USB port (it appears as a MIDI device) or a USB-MIDI interface on the
+//! 5-pin jacks.
 
 mod midi;
 
 use gsystem_protocol::preset::slot_label;
-use gsystem_protocol::sysex::Message;
 use gsystem_protocol::{syx, vyzor, Bank};
 use std::path::Path;
 
@@ -21,16 +21,20 @@ File commands (offline):
   gsys scripts <file.Prs|.Ebf|.SQS>         show SysEx the editor's TRAN/RECV scripts send/expect
   gsys rename <in.syx> <slot> \"<name>\" <out.syx>
 
-MIDI commands:
+MIDI commands (<port> matches by name, e.g. \"G-System\"; in and out may differ):
   gsys ports                                list MIDI in/out ports
-  gsys monitor <in-port>                    print every G-System message received
-  gsys request <in-port> <out-port> <slot>  request one preset dump and print it
-  gsys backup <in-port> <out-port> <out.syx> [from] [to]
-                                            request slots from..to and save to .syx
-  gsys send <in-port> <out-port> <file.syx> send every preset dump in the file
-  gsys raw <out-port> <hex bytes>           send an arbitrary SysEx (e.g. \"F0 00 20 1F 00 55 57 01 F7\")
+  gsys identify <port> [<out-port>]         ask the unit for its firmware version
+  gsys monitor <port>                       print every G-System message received
+  gsys request <port> <slot>                read one user preset and print it
+  gsys backup <port> <out.syx> [from] [to]  read user slots from..to (default all) into a .syx
+  gsys raw <port> <hex bytes>               send an arbitrary SysEx
 
-Slot numbers are 0-based (00-1 = 0 … 19-5 = 99, user bank starts at 100)."
+Writing to the unit (read PROTOCOL.md \"Storing presets\" first):
+  gsys store <port> <file.syx> <file-slot> <unit-slot> --sysex-id <n> --i-accept-the-risk
+                                            store one preset, then read it back to verify.
+                                            The store sequence has frozen units; back up first.
+
+Slots are 0-based user slots: 0 = 00-1 … 199 = 39-5."
     );
     std::process::exit(2);
 }
@@ -122,46 +126,89 @@ fn main() {
         }
         "ports" => midi::list_ports(),
         "monitor" => midi::monitor(a(1)),
+        "identify" => {
+            let mut sess =
+                midi::Session::open(a(1), args.get(2).map(String::as_str).unwrap_or(a(1)));
+            match sess.identify() {
+                Some(v) => println!("G-System answered (version bytes {v})"),
+                None => {
+                    eprintln!("no G-System answered the device inquiry");
+                    std::process::exit(1)
+                }
+            }
+        }
         "request" => {
-            let slot: u8 = a(3).parse().unwrap_or_else(|_| usage());
-            match midi::request_preset(a(1), a(2), slot) {
-                Some(p) => println!(
+            let slot: usize = a(2).parse().unwrap_or_else(|_| usage());
+            let mut sess = midi::Session::open(a(1), a(1));
+            match sess.request(slot) {
+                Ok(Some(p)) => println!(
                     "{}  {}  {}\n{}",
                     slot,
-                    slot_label(slot as usize),
+                    slot_label(slot),
                     p.name(),
                     hex(&p.raw)
                 ),
-                None => {
-                    eprintln!("no dump received (check cables, MIDI channel, and that SysEx is enabled on the unit)");
+                Ok(None) => {
+                    eprintln!("no answer: the slot may be empty, or the unit busy/not connected");
+                    std::process::exit(1)
+                }
+                Err(e) => {
+                    eprintln!("{e}");
                     std::process::exit(1)
                 }
             }
         }
         "backup" => {
-            let from: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
-            let to: usize = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(199);
+            let from: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let to: usize = args
+                .get(4)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(199)
+                .min(199);
+            let mut sess = midi::Session::open(a(1), a(1));
             let mut bank = Bank::empty();
             for slot in from..=to {
-                match midi::request_preset(a(1), a(2), slot as u8) {
-                    Some(p) => {
+                match sess.request(slot) {
+                    Ok(Some(p)) => {
                         println!("{:>3} {} {}", slot, slot_label(slot), p.name());
                         bank.set(slot, p);
                     }
-                    None => println!("{:>3} {} (no response)", slot, slot_label(slot)),
+                    Ok(None) => println!("{:>3} {} (empty / no answer)", slot, slot_label(slot)),
+                    Err(e) => println!("{:>3} {} {e}", slot, slot_label(slot)),
                 }
             }
-            std::fs::write(a(3), syx::save_bank(&bank, 0)).expect("write");
-            println!("saved {} presets to {}", bank.occupied(), a(3));
+            std::fs::write(a(2), syx::save_bank(&bank, 0)).expect("write");
+            println!("saved {} presets to {}", bank.occupied(), a(2));
         }
-        "send" => {
-            let bytes = std::fs::read(a(3)).expect("read");
-            let (msgs, _) = syx::parse_all(&bytes);
-            let dumps: Vec<Message> = msgs
-                .into_iter()
-                .filter(|m| matches!(m, Message::PresetDump { .. }))
-                .collect();
-            midi::send_dumps(a(1), a(2), &dumps);
+        "store" => {
+            if !args.iter().any(|x| x == "--i-accept-the-risk") {
+                eprintln!("refusing: storing can freeze the unit (see PROTOCOL.md). Add --i-accept-the-risk after backing up.");
+                std::process::exit(2)
+            }
+            let id: u8 = args
+                .iter()
+                .position(|x| x == "--sysex-id")
+                .and_then(|i| args.get(i + 1))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_else(|| {
+                    eprintln!("--sysex-id <n> is required (Global › MIDI › SysEx ID on the unit)");
+                    std::process::exit(2)
+                });
+            let bank = load_any(Path::new(a(2)));
+            let from: usize = a(3).parse().unwrap_or_else(|_| usage());
+            let to: usize = a(4).parse().unwrap_or_else(|_| usage());
+            let p = bank.get(from).cloned().unwrap_or_else(|| {
+                eprintln!("slot {from} is empty in {}", a(2));
+                std::process::exit(1)
+            });
+            let mut sess = midi::Session::open(a(1), a(1));
+            match sess.store(id, to, &p) {
+                Ok(()) => println!("stored {:?} in {} and verified", p.name(), slot_label(to)),
+                Err(e) => {
+                    eprintln!("store failed: {e}");
+                    std::process::exit(1)
+                }
+            }
         }
         "raw" => {
             let bytes: Vec<u8> = args[2..]
