@@ -35,17 +35,31 @@ tools/                    gsys_preset_decode.py — the Python prototype of the 
 
 ## Screenshots
 
-**Banks** — the 200-slot user bank laid out like the footswitches, with a live
-hardware strip (current preset, active switch, which blocks are on) and an
+The editor is styled after the unit itself: a front panel with the red LED bank
+display, the green LCD, the five preset footswitches (click to select, ▲▼ to
+change bank) and the effect status LEDs. Panel lettering uses Michroma, close to
+TC's engraved type. Choose a grey, black or red brushed finish from the header.
+
+**Banks** — the 200-slot user bank laid out like the footswitches, with an
 inspector for the selected preset. Amber dots mark slots that differ from the unit.
 
 ![Banks view](docs/screenshots/banks.png)
 
-**Preset** — the signal chain in audio order, then one card per effect block.
-Every block shows the parameters of its current effect type, with value lists,
-units and ranges from the firmware tables.
+**Preset** — one module per effect block, with a lit ring when it's on, plus the
+loop, insert and boost switches. Pick a module to edit it on knobs: drag up or
+down, scroll, or use the arrow keys (hold Shift while dragging for fine
+control). Each block shows the parameters of its current effect type, with
+value lists, units and ranges from the firmware tables. *All blocks* shows every
+block at once. In Live mode, each turn of a knob goes to the unit's edit buffer.
 
 ![Preset view](docs/screenshots/preset.png)
+
+<table>
+<tr>
+<td width="50%"><b>Black brushed</b><br><img src="docs/screenshots/preset-black.png" alt="Preset view, black finish"></td>
+<td width="50%"><b>Red brushed</b><br><img src="docs/screenshots/preset-red.png" alt="Preset view, red finish"></td>
+</tr>
+</table>
 
 <table>
 <tr>

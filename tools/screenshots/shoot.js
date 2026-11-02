@@ -9,20 +9,12 @@ const http = require("http");
 const DIST = process.argv[2];
 const FACTORY = process.argv[3];
 const OUT = process.argv[4];
-const FONTS = path.join(__dirname, "node_modules/@fontsource");
-
 const factory = JSON.parse(fs.readFileSync(FACTORY, "utf8"));
-const fontCss = (port) => [
-  ["Inter", 400, "inter/files/inter-latin-400-normal.woff2"],
-  ["Inter", 500, "inter/files/inter-latin-500-normal.woff2"],
-  ["Inter", 600, "inter/files/inter-latin-600-normal.woff2"],
-  ["JetBrains Mono", 400, "jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2"],
-  ["JetBrains Mono", 500, "jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2"],
-].map(([f, w, p]) => `@font-face{font-family:"${f}";font-weight:${w};src:url(http://localhost:${port}/__fonts/${p}) format("woff2")}`).join("\n");
+// Fonts are bundled into the build (@fontsource), so the page needs no network.
 
 const server = http.createServer((req, res) => {
   let p = decodeURIComponent(req.url.split("?")[0]);
-  let file = p.startsWith("/__fonts/") ? path.join(FONTS, p.slice(9)) : path.join(DIST, p === "/" ? "index.html" : p);
+  let file = path.join(DIST, p === "/" ? "index.html" : p);
   if (!fs.existsSync(file)) { res.writeHead(404); return res.end(); }
   const type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : file.endsWith(".woff2") ? "font/woff2" : "text/html";
   res.writeHead(200, { "content-type": type, "access-control-allow-origin": "*" });
@@ -34,7 +26,6 @@ const server = http.createServer((req, res) => {
   const port = server.address().port;
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1360, height: 860 }, deviceScaleFactor: 2 });
-  await page.route("https://fonts.googleapis.com/**", (r) => r.fulfill({ contentType: "text/css", body: fontCss(port) }));
   await page.addInitScript((factory) => {
     const label = (i) => `${String(Math.floor(i / 5)).padStart(2, "0")}-${(i % 5) + 1}`;
     const slots = Array.from({ length: 200 }, (_, i) => ({ index: i, label: label(i), name: null }));
@@ -49,7 +40,8 @@ const server = http.createServer((req, res) => {
       invoke: async (cmd, args) => {
         switch (cmd) {
           case "get_bank": return bank;
-          case "preset_view": return factory.find((x) => x.slot === args.index).view;
+          case "preset_view":
+          case "edit_preset": return factory.find((x) => x.slot === args.index).view;
           case "midi_ports": return { inputs: ["G-System"], outputs: ["G-System"] };
           case "midi_identify": return "01 00 04 02";
           case "midi_backup": bank = loaded; return factory.map((p) => p.slot);
@@ -71,8 +63,22 @@ const server = http.createServer((req, res) => {
   await page.screenshot({ path: path.join(OUT, "banks.png") });
 
   await page.click('[data-view="preset"]');
+  await page.click('[data-block="delay"]');
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(OUT, "preset.png") });
+
+  // The three panel finishes (grey is the default).
+  for (const skin of ["black", "red"]) {
+    await page.click(`[data-skin="${skin}"]`);
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(OUT, `preset-${skin}.png`) });
+  }
+  await page.click('[data-block="reverb"]');
+  await page.click('[data-skin="grey"]');
+  await page.click('[data-mode="all"]');
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(OUT, "preset-all.png") });
+  await page.click('[data-mode="block"]');
 
   await page.click('[data-view="global"]');
   await page.waitForTimeout(400);

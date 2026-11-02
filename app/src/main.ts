@@ -45,6 +45,21 @@ let focusBlock: string | null = null;
 let globals: GlobalsView | null = null;
 let globalsBusy = false;
 let live = false;
+let presetMode: "block" | "all" = "block";
+type Skin = "grey" | "black" | "red";
+const SKINS: [Skin, string][] = [["grey", "Grey brushed"], ["black", "Black brushed"], ["red", "Red brushed"]];
+let skin: Skin = "grey";
+try {
+  const s = localStorage.getItem("skin") as Skin | null;
+  if (s && SKINS.some(([k]) => k === s)) skin = s;
+} catch { /* storage unavailable: keep the default */ }
+function setSkin(s: Skin) {
+  skin = s;
+  document.documentElement.dataset.skin = s;
+  try { localStorage.setItem("skin", s); } catch { /* ignore */ }
+  render();
+}
+document.documentElement.dataset.skin = skin;
 const STORE_HINT = "Nothing is stored yet: press STORE on the G-System to keep it.";
 
 async function audition(index: number) {
@@ -199,6 +214,8 @@ function header(): string {
       <span class="name">${fileName() ? esc(fileName()!) : "No bank loaded"}</span>
       ${bank.dirty.length ? `<span class="pill">${bank.dirty.length} edited</span>` : ""}
     </div>
+    <div class="finish" role="group" aria-label="Panel finish">${SKINS.map(([k, label]) =>
+      `<button class="sw-${k} ${skin === k ? "on" : ""}" data-skin="${k}" title="${label}" aria-label="${label}" aria-pressed="${skin === k}"></button>`).join("")}</div>
     <div style="display:flex;gap:8px">
       <button class="btn" id="open">Open…</button>
       <button class="btn" id="save" ${bank.occupied ? "" : "disabled"}>Save .syx</button>
@@ -207,20 +224,39 @@ function header(): string {
   </header>`;
 }
 function logo() {
-  return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="3" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="12" r="1.6" fill="#f0b243"/><circle cx="12" cy="12" r="1.6" fill="#f0b243"/><circle cx="16" cy="12" r="1.6" fill="#f0b243"/></svg>`;
+  // The app icon's "Signal G": a ring with a lit LED.
+  return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 8.5A8 8 0 1 0 20 12h-7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="19.5" cy="5" r="2" fill="#ff3b2a"/></svg>`;
 }
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const STATUS_LEDS: [string, string][] = [["comp", "Comp"], ["filter", "Filter"], ["mod", "Mod"], ["pitch", "Pitch"], ["delay", "Delay"], ["reverb", "Reverb"], ["eq", "EQ"], ["gate", "Gate"], ["boost", "Boost"]];
+/** The unit's front panel: LED bank display, LCD, the five preset footswitches
+ * with their LEDs and scribble strips, and the effect status LEDs. */
 function strip(): string {
   const s = selected != null ? bank.slots[selected] : null;
   const bankNo = selected != null ? Math.floor(selected / 5) : null;
-  const sw = [1, 2, 3, 4, 5].map((n) => `<span class="fsw ${selected != null && selected % 5 === n - 1 ? "on" : ""}">${n}</span>`).join("");
-  const tags = (detail?.chain ?? []).filter((c) => !c.key.startsWith("loop") && c.key !== "insert")
-    .map((c) => `<span class="tag ${c.on ? "on" : ""}">${esc(c.name.toUpperCase())}</span>`)
-    .join("");
-  return `<section class="strip" aria-label="Unit status">
-    <div class="lcd"><span class="slot">${s ? s.label : "--·-"}</span><span class="sep">│</span><span>${s?.name ? esc(s.name) : "<span class='dim'>no preset</span>"}</span></div>
-    <div class="switches"><span class="eyebrow">Bank ${bankNo != null ? String(bankNo).padStart(2, "0") : "--"}</span>${sw}</div>
-    <div class="blocks">${tags}</div>
-    <div class="tempo"><span class="muted">TEMPO</span><span>${detail?.bpm != null ? `${detail.bpm} BPM` : "— BPM"}</span></div>
+  const chain = new Map((detail?.chain ?? []).map((c) => [c.key, c]));
+  const fs = [0, 1, 2, 3, 4].map((p) => {
+    const i = bankNo != null ? bankNo * 5 + p : null;
+    const nm = i != null ? bank.slots[i]?.name : null;
+    const lit = selected != null && selected % 5 === p;
+    return `<button class="fs ${lit ? "on" : ""}" data-fs="${p}" ${bankNo == null ? "disabled" : ""} aria-label="Switch ${p + 1}${nm ? `: ${esc(nm)}` : ""}">
+      <i class="led"></i><span class="dome"></span><span class="scr">${nm ? esc(nm) : "—"}</span></button>`;
+  }).join("");
+  const leds = STATUS_LEDS.map(([k, label]) => `<span class="sl ${chain.get(k)?.on ? "on" : ""}"><i></i>${label}</span>`).join("");
+  const routing = detail ? detail.routings[detail.routing] : "";
+  return `<section class="frontpanel" aria-label="Unit">
+    <div class="display">
+      <div class="ledbank" aria-label="Bank ${bankNo != null ? pad2(bankNo) : "none"}">
+        <span class="digits">${bankNo != null ? pad2(bankNo) : "--"}<sup>${selected != null ? (selected % 5) + 1 : ""}</sup></span>
+        <span class="nudges"><button class="nudge" data-bank="-1" aria-label="Previous bank">▲</button><button class="nudge" data-bank="1" aria-label="Next bank">▼</button></span>
+      </div>
+      <div class="lcd">
+        <div class="l1"><span class="nm">${s?.name ? esc(s.name) : "NO PRESET"}</span><span class="bpm">${detail?.bpm != null ? `${detail.bpm} BPM` : ""}</span></div>
+        <div class="l2"><span>${s ? `${s.label}${fileName() ? ` · ${esc(fileName()!)}` : ""}` : "SELECT A SLOT"}</span><span>${esc(routing)}</span></div>
+      </div>
+    </div>
+    <div class="switchbank">${fs}</div>
+    <div class="statusleds">${leds}</div>
   </section>`;
 }
 
@@ -276,7 +312,7 @@ function inspector(): string {
       <div class="eyebrow mono" style="margin-bottom:6px">${s.label} · USER BANK</div>
       <label for="pname" style="position:absolute;left:-9999px">Preset name</label>
       <input id="pname" class="pname" value="${esc(s.name)}" maxlength="20">
-      <div style="display:flex;justify-content:space-between;font-size:11px;margin-top:6px" class="dim"><span>${s.name.length} / 20 characters</span>${dirty ? `<span style="color:var(--amber)">Edited</span>` : ""}</div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-top:6px" class="dim"><span>${s.name.length} / 20 characters</span>${dirty ? `<span style="color:var(--edited)">Edited</span>` : ""}</div>
     </div>
     <div style="display:flex;flex-direction:column;gap:6px">
       <div class="eyebrow">Signal chain</div>
@@ -296,7 +332,7 @@ function inspector(): string {
 }
 function unitPanel(): string {
   if (!unit.connected) {
-    return `<div class="note" style="margin-top:auto"><b>Unit vs. file</b>No G-System connected. Edits stay in this file until you <a href="#" id="toconnect" style="color:#9bb8e8">connect</a> and sync.</div>`;
+    return `<div class="note" style="margin-top:auto"><b>Unit vs. file</b>No G-System connected. Edits stay in this file until you <a href="#" id="toconnect" class="link">connect</a> and sync.</div>`;
   }
   const d = bank.dirty;
   const list = d.slice(0, 6).map((i) => bank.slots[i].label).join(", ") + (d.length > 6 ? ", …" : "");
@@ -304,26 +340,42 @@ function unitPanel(): string {
 }
 
 // ---------------------------------------------------------------- preset view
-function paramRow(r: Row): string {
+// Knobs: 270° sweep. Bipolar ranges (e.g. -12..+12 dB) light the arc from the centre.
+const KNOB_R = 24;
+function polar(deg: number, r = KNOB_R): string {
+  const a = (deg * Math.PI) / 180;
+  return `${(30 + r * Math.sin(a)).toFixed(2)} ${(30 - r * Math.cos(a)).toFixed(2)}`;
+}
+function arc(a1: number, a2: number): string {
+  if (a2 < a1) [a1, a2] = [a2, a1];
+  if (a2 - a1 < 0.5) return "";
+  return `M ${polar(a1)} A ${KNOB_R} ${KNOB_R} 0 ${a2 - a1 > 180 ? 1 : 0} 1 ${polar(a2)}`;
+}
+function knobSvg(lo: number, hi: number, v: number): string {
+  const t = hi > lo ? (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo) : 0;
+  const av = -135 + 270 * t;
+  const a0 = lo < 0 && hi > 0 ? -135 + (270 * -lo) / (hi - lo) : -135;
+  return `<svg viewBox="0 0 60 60" aria-hidden="true">
+    <path class="trk" d="${arc(-135, 135)}"/>
+    <path class="val" d="${arc(a0, av)}"/>
+    <circle class="face" cx="30" cy="30" r="17"/>
+    <path class="ptr" d="M ${polar(av, 6)} L ${polar(av, 14)}"/>
+  </svg>`;
+}
+function knob(attrs: string, label: string, lo: number, hi: number, value: number, display: string): string {
+  const v = Math.min(hi, Math.max(lo, value));
+  return `<div class="knob" ${attrs} data-lo="${lo}" data-hi="${hi}" data-v="${v}" tabindex="0" role="slider"
+      aria-label="${esc(label)}" aria-valuemin="${lo}" aria-valuemax="${hi}" aria-valuenow="${v}" aria-valuetext="${esc(display)}">${knobSvg(lo, hi, v)}</div>`;
+}
+function control(r: Row): string {
+  const out = r.value < r.lo || r.value > r.hi;
   if (r.choices) {
     const opts = r.choices.map((c, i) => `<option value="${r.lo + i}" ${r.lo + i === r.value ? "selected" : ""}>${esc(c)}</option>`).join("");
-    return `<div class="prow"><label>${esc(r.label)}</label><select class="sel" data-field="${r.field}" aria-label="${esc(r.label)}">${opts}</select><span class="val"></span></div>`;
+    return `<div class="kc choice"><span class="kn">${esc(r.label)}</span><select class="sel" data-field="${r.field}" aria-label="${esc(r.label)}">${opts}</select></div>`;
   }
-  const out = r.value < r.lo || r.value > r.hi;
-  return `<div class="prow ${out ? "unmapped" : ""}">
-    <label>${esc(r.label)}</label>
-    <input type="range" min="${r.lo}" max="${r.hi}" step="1" value="${Math.min(r.hi, Math.max(r.lo, r.value))}" data-field="${r.field}" aria-label="${esc(r.label)}">
-    <span class="val">${esc(r.display)}</span>
-  </div>`;
-}
-function blockCard(b: BlockView): string {
-  const typeSel = b.types.length
-    ? `<select class="sel" data-type="${b.key}" aria-label="${esc(b.label)} type">${b.types.map((t, i) => `<option value="${i}" ${i === b.type_index ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`
-    : `<span style="margin-left:auto"></span>`;
-  return `<section class="card ${b.on ? "" : "off"} ${focusBlock === b.key ? "focus" : ""}" id="card-${b.key}" aria-label="${esc(b.label)}">
-    <div class="hd"><span class="ttl">${esc(b.label)}</span>${typeSel}<button class="toggle ${b.on ? "on" : ""}" data-toggle="${b.key}" aria-label="${b.on ? "On" : "Off"}"></button></div>
-    <div class="bd">${b.rows.map(paramRow).join("")}${modifierRows(b.key)}</div>
-  </section>`;
+  return `<div class="kc ${out ? "unmapped" : ""}"><span class="kn">${esc(r.label)}</span>
+    ${knob(`data-field="${r.field}"`, r.label, r.lo, r.hi, r.value, r.display)}
+    <span class="kv" data-val="${r.field}">${esc(r.display)}</span></div>`;
 }
 function modifierRows(key: string): string {
   const d = detail;
@@ -334,41 +386,74 @@ function modifierRows(key: string): string {
       <select class="sel" data-mod-source aria-label="${esc(m.label)} modifier source">${d.sources.map((s, i) => `<option value="${i}" ${i === m.source ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
       ${(["min", "mid", "max"] as const).map((k) => `<input type="number" min="0" max="100" value="${m[k]}" data-mod-${k} ${m.source ? "" : "disabled"} aria-label="${esc(m.label)} ${k} %">`).join("")}
     </div>`;
-  return `<details class="mods" ${mods.some((m) => m.source) ? "open" : ""}><summary>Modifiers <span class="dim">${mods.filter((m) => m.source).length}/${mods.length} assigned · min / mid / max %</span></summary>${mods.map(row).join("")}</details>`;
+  return `<details class="mods" ${mods.some((m) => m.source) ? "open" : ""}><summary>Modifiers <span class="dim">${mods.filter((m) => m.source).length}/${mods.length} assigned · source · min / mid / max %</span></summary>${mods.map(row).join("")}</details>`;
 }
-function routingCard(d: Detail): string {
-  const loops = d.chain.filter((c) => c.key.startsWith("loop") || c.key === "insert").map((c) =>
-    `<button class="${c.on ? "on" : ""}" data-toggle="${c.key}"><div class="k">${esc(c.name)}</div><div class="v">${c.on ? "On" : "Off"}</div></button>`).join("");
-  return `<section class="card" aria-label="Routing, loops and boost">
-    <div class="hd"><span class="ttl">Routing · Loops · Boost</span>
-      <select class="sel" data-routing aria-label="Routing">${d.routings.map((o, i) => `<option value="${i}" ${d.routing === i ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></div>
-    <div class="bd">
-      <div class="loops4 five">${loops}</div>
-      <div class="prow"><label>Boost</label><button class="toggle ${d.boost ? "on" : ""}" data-toggle="boost" aria-label="Boost ${d.boost ? "on" : "off"}"></button><span class="val"></span></div>
-      <div class="prow"><label>Boost level</label><input type="range" min="0" max="10" step="1" value="${d.boost_level}" data-boost aria-label="Boost level"><span class="val">${d.boost_level} dB</span></div>
-      <div class="prow"><label>Tempo</label><input type="number" min="20" max="600" value="${d.bpm ?? ""}" data-bpm class="sel" aria-label="Tempo in BPM" style="width:90px"><span class="val">BPM</span></div>
-      <div class="note">Tempo sets every tap time; delay times and speeds with a note value follow it.</div>
-      <div class="prow"><label>NovaDrive</label><select class="sel" data-nova aria-label="NovaDrive NDR-1 preset">${Array.from({ length: 19 }, (_, i) => `<option value="${i}" ${i === d.nova_preset ? "selected" : ""}>${i ? `Preset ${i}` : "None"}</option>`).join("")}</select><span class="val"></span></div>
-      ${modifierRows("novadrive")}
+const modeSeg = () => `<div class="seg"><button class="${presetMode === "block" ? "on" : ""}" data-mode="block">Block</button><button class="${presetMode === "all" ? "on" : ""}" data-mode="all">All blocks</button></div>`;
+function blockPanel(b: BlockView, withMode: boolean): string {
+  const typeSel = b.types.length
+    ? `<select class="sel" data-type="${b.key}" aria-label="${esc(b.label)} type">${b.types.map((t, i) => `<option value="${i}" ${i === b.type_index ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`
+    : "";
+  const mix = b.rows.find((r) => r.label === "Mix");
+  const outl = b.rows.find((r) => r.label === "Out level");
+  const sum = [mix && `<span>Mix <b>${esc(mix.display)}</b></span>`, outl && `<span>Out <b>${esc(outl.display)}</b></span>`].filter(Boolean).join("");
+  return `<section class="focus ${b.on ? "" : "off"}" id="card-${b.key}" aria-label="${esc(b.label)}">
+    <div class="fhd"><span class="ttl">${esc(b.label)}</span>${typeSel}
+      <button class="onoff ${b.on ? "on" : ""}" data-toggle="${b.key}" aria-pressed="${b.on}"><i></i>${b.on ? "On" : "Off"}</button>
+      <span class="sum">${sum}</span>${withMode ? modeSeg() : ""}</div>
+    <div class="knobs">${b.rows.map(control).join("")}</div>
+    ${modifierRows(b.key) ? `<div class="fmods">${modifierRows(b.key)}</div>` : ""}
+  </section>`;
+}
+function routingPanel(d: Detail, withMode: boolean): string {
+  return `<section class="focus" id="card-routing" aria-label="Routing and tempo">
+    <div class="fhd"><span class="ttl">Routing</span>
+      <select class="sel" data-routing aria-label="Routing">${d.routings.map((o, i) => `<option value="${i}" ${d.routing === i ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>
+      <span class="sum"></span>${withMode ? modeSeg() : ""}</div>
+    <div class="knobs">
+      <div class="kc"><span class="kn">Boost level</span>${knob("data-boost", "Boost level", 0, 10, d.boost_level, `${d.boost_level} dB`)}<span class="kv" data-val="boost">${d.boost_level} dB</span></div>
+      <div class="kc choice"><span class="kn">Tempo</span><input type="number" min="20" max="600" value="${d.bpm ?? ""}" data-bpm class="sel" aria-label="Tempo in BPM"><span class="kv">BPM</span></div>
+      <div class="kc choice"><span class="kn">NovaDrive</span><select class="sel" data-nova aria-label="NovaDrive NDR-1 preset">${Array.from({ length: 19 }, (_, i) => `<option value="${i}" ${i === d.nova_preset ? "selected" : ""}>${i ? `Preset ${i}` : "None"}</option>`).join("")}</select></div>
     </div>
+    <div class="fnote">Tempo sets every tap time; delay times and speeds with a note value follow it.</div>
+    ${modifierRows("novadrive") ? `<div class="fmods">${modifierRows("novadrive")}</div>` : ""}
   </section>`;
 }
 function presetView(): string {
   const d = detail;
   if (!d) return `<main class="body"><div class="centered"><div class="note">Pick a preset in Banks first.</div></div></main>`;
-  const tiles = d.chain.map((c) =>
-    `<button class="tile ${c.on ? "on" : ""} ${focusBlock === c.key ? "focus" : ""}" data-block="${c.key}"><span class="t">${esc(c.name)}<i></i></span><span class="s">${esc(c.summary)}</span></button>`).join("");
-  return `
-    <section class="chain" aria-label="Signal chain">${tiles}</section>
-    ${unit.connected
-      ? `<div class="livebar ${live ? "on" : ""}">
-          <button class="toggle ${live ? "on" : ""}" id="live" aria-label="Live mode ${live ? "on" : "off"}"></button>
-          <div><b>Live</b> ${live ? "— every change is sent to the unit's edit buffer as you make it." : "— off: edits change the file only."}
-          <span class="dim">To keep a sound on the unit, press <b>STORE</b> on the G-System and pick a slot there.</span></div>
-          <span class="status ${statusErr ? "err" : ""}">${esc(status)}</span>
-        </div>`
-      : `<div class="banner">Edits change this file. Connect a G-System to hear them live, then press STORE on the unit to keep them.</div>`}
-    <main class="cards">${d.blocks.map(blockCard).join("")}${routingCard(d)}</main>`;
+  const chain = new Map(d.chain.map((c) => [c.key, c]));
+  if (!focusBlock || (focusBlock !== "routing" && !d.blocks.some((b) => b.key === focusBlock))) {
+    focusBlock = d.blocks.find((b) => b.on)?.key ?? d.blocks[0]?.key ?? "routing";
+  }
+  const modules = d.blocks.map((b) => {
+    const c = chain.get(b.key);
+    return `<button class="module ${b.on ? "on" : ""} ${focusBlock === b.key ? "sel" : ""}" data-block="${b.key}">
+      <span class="ml">${esc(c?.name ?? b.label)}</span><span class="mt">${esc(b.type_index != null ? b.types[b.type_index] : c?.summary ?? "")}</span><span class="cap"></span></button>`;
+  }).join("");
+  const assigned = d.modifiers.filter((m) => m.source).length;
+  const rack = `${modules}
+    <button class="module text ${focusBlock === "routing" ? "sel" : ""}" data-block="routing"><span class="ml">Routing</span><span class="mt">${esc(d.routings[d.routing])}</span><span class="big">${d.bpm != null ? `${d.bpm}` : "—"}<small>BPM</small></span></button>
+    <div class="module text static"><span class="ml">Modifiers</span><span class="mt">${assigned ? `${assigned} assigned` : "none"}</span><span class="big">${assigned}<small>/${d.modifiers.length}</small></span></div>`;
+  const loops = d.chain.filter((c) => c.key.startsWith("loop") || c.key === "insert").map((c) =>
+    `<button class="lsw ${c.on ? "on" : ""}" data-toggle="${c.key}" aria-pressed="${c.on}"><i></i>${esc(c.key === "insert" ? "INS" : c.name.replace(/Loop\s*/i, "L"))}</button>`).join("");
+  const switches = `<div class="switchrow">${loops}
+    <button class="lsw boost ${d.boost ? "on" : ""}" data-toggle="boost" aria-pressed="${d.boost}"><i></i>Boost <b>${d.boost_level} dB</b></button></div>`;
+  const livebar = unit.connected
+    ? `<div class="livebar ${live ? "on" : ""}">
+        <button class="toggle ${live ? "on" : ""}" id="live" aria-label="Live mode ${live ? "on" : "off"}"></button>
+        <div><b>Live</b> ${live ? "— every change goes to the unit's edit buffer as you make it." : "— off: edits change the file only."}
+        <span class="dim">To keep a sound on the unit, press <b>STORE</b> on the G-System and pick a slot there.</span></div>
+        <span class="status ${statusErr ? "err" : ""}">${esc(status)}</span>
+      </div>`
+    : `<div class="banner">Edits change this file. Connect a G-System to hear them live, then press STORE on the unit to keep them.</div>`;
+  const body = presetMode === "all"
+    ? `<div class="allhd">${modeSeg()}</div>${d.blocks.map((b) => blockPanel(b, false)).join("")}${routingPanel(d, false)}`
+    : focusBlock === "routing"
+      ? routingPanel(d, true)
+      : blockPanel(d.blocks.find((b) => b.key === focusBlock)!, true);
+  return `<section class="rack" aria-label="Effect blocks">${rack}</section>
+    ${switches}
+    <main class="presetbody">${livebar}${body}</main>`;
 }
 
 // ---------------------------------------------------------------- global view
@@ -420,8 +505,12 @@ function connectView(): string {
 
 // ---------------------------------------------------------------- render + wiring
 function render() {
+  // Keep keyboard focus on the same control across re-renders.
+  const a = document.activeElement as HTMLElement | null;
+  const key = a?.dataset.field != null ? `[data-field="${a.dataset.field}"]` : a?.hasAttribute("data-boost") ? "[data-boost]" : null;
   app.innerHTML = header() + (view === "connect" ? connectView() : strip() + (view === "banks" ? banksView() : view === "preset" ? presetView() : globalView()));
   wire();
+  if (key) document.querySelector<HTMLElement>(key)?.focus();
 }
 function on(id: string, fn: (el: HTMLElement) => void) {
   const el = document.getElementById(id);
@@ -487,22 +576,27 @@ function wire() {
     };
   });
 
-  // preset view: tiles focus a card; sliders/selects/toggles write params
+  // finish, front panel
+  document.querySelectorAll<HTMLButtonElement>("[data-skin]").forEach((b) => (b.onclick = () => setSkin(b.dataset.skin as Skin)));
+  document.querySelectorAll<HTMLButtonElement>("[data-fs]").forEach((b) => (b.onclick = async () => {
+    if (selected == null) return;
+    await selectSlot(Math.floor(selected / 5) * 5 + Number(b.dataset.fs));
+  }));
+  document.querySelectorAll<HTMLButtonElement>("[data-bank]").forEach((b) => (b.onclick = async () => {
+    const cur = selected ?? 0;
+    const nb = Math.min(39, Math.max(0, Math.floor(cur / 5) + Number(b.dataset.bank)));
+    half = nb < 20 ? 0 : 1;
+    await selectSlot(nb * 5 + (cur % 5));
+  }));
+
+  // preset view: modules pick the block shown in the panel; knobs/selects/toggles write params
   document.querySelectorAll<HTMLButtonElement>("[data-block]").forEach((b) => (b.onclick = () => {
     focusBlock = b.dataset.block!;
-    render();
-    document.getElementById(`card-${focusBlock}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (presetMode === "all") document.getElementById(`card-${focusBlock}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+    else render();
   }));
-  const edit = async (e: Edit) => {
-    if (selected == null) return;
-    try {
-      detail = await invoke<Detail>("edit_preset", { index: selected, edit: e });
-      bank.dirty = [...new Set([...bank.dirty, selected])];
-      render();
-    } catch (err) {
-      setStatus(String(err), true);
-    }
-  };
+  document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach((b) => (b.onclick = () => { presetMode = b.dataset.mode as "block" | "all"; render(); }));
+  document.querySelectorAll<HTMLElement>(".knob").forEach(wireKnob);
   document.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-field]").forEach((el) => {
     const field = Number(el.dataset.field);
     el.onchange = () => edit({ kind: "field", field, value: Number(el.value) });
@@ -533,6 +627,96 @@ function wire() {
     render();
   });
   on("toconnect2", () => go("connect"));
+}
+async function selectSlot(i: number) {
+  selected = i;
+  await refresh();
+  if (live && bank.slots[i]?.name != null) await audition(i);
+}
+/** Apply one edit through the Rust core. `rerender: false` keeps the DOM (used while a knob is being dragged). */
+async function edit(e: Edit, rerender = true): Promise<Detail | null> {
+  if (selected == null) return null;
+  try {
+    detail = await invoke<Detail>("edit_preset", { index: selected, edit: e });
+    if (!bank.dirty.includes(selected)) bank.dirty = [...bank.dirty, selected];
+    if (rerender) render();
+    return detail;
+  } catch (err) {
+    setStatus(String(err), true);
+    return null;
+  }
+}
+function knobEdit(el: HTMLElement, v: number): Edit {
+  return el.dataset.field != null ? { kind: "field", field: Number(el.dataset.field), value: v } : { kind: "boost_level", value: v };
+}
+function setKnob(el: HTMLElement, v: number) {
+  const lo = Number(el.dataset.lo), hi = Number(el.dataset.hi);
+  el.dataset.v = String(v);
+  el.setAttribute("aria-valuenow", String(v));
+  el.innerHTML = knobSvg(lo, hi, v);
+}
+function showKnobValue(el: HTMLElement, d: Detail | null) {
+  if (!d) return;
+  const field = el.dataset.field;
+  let text: string | undefined;
+  if (field != null) text = d.blocks.flatMap((b) => b.rows).find((r) => r.field === Number(field))?.display;
+  else text = `${d.boost_level} dB`;
+  if (text == null) return;
+  el.setAttribute("aria-valuetext", text);
+  const out = document.querySelector<HTMLElement>(`[data-val="${field ?? "boost"}"]`);
+  if (out) out.textContent = text;
+}
+/** Drag up/down (or wheel, arrow keys) to turn. While dragging, edits are sent
+ * at most every 60 ms (Live mode hears them); the screen re-renders on release. */
+let settle: number | null = null;
+function wireKnob(el: HTMLElement) {
+  const lo = Number(el.dataset.lo), hi = Number(el.dataset.hi);
+  const clamp = (v: number) => Math.min(hi, Math.max(lo, v));
+  const pxPerStep = Math.min(12, Math.max(1.5, 180 / Math.max(1, hi - lo)));
+  let pending: number | null = null;
+  let timer: number | null = null;
+  const push = () => {
+    timer = null;
+    if (pending == null) return;
+    const v = pending;
+    pending = null;
+    edit(knobEdit(el, v), false).then((d) => {
+      showKnobValue(el, d);
+      // Wheel and keys: refresh the rest of the screen once turning stops.
+      if (!el.classList.contains("turning")) {
+        if (settle != null) clearTimeout(settle);
+        settle = window.setTimeout(render, 500);
+      }
+    });
+  };
+  const turnTo = (v: number) => {
+    v = clamp(v);
+    if (v === Number(el.dataset.v)) return;
+    setKnob(el, v);
+    pending = v;
+    if (timer == null) timer = window.setTimeout(push, 60);
+  };
+  el.onpointerdown = (ev) => {
+    ev.preventDefault();
+    el.setPointerCapture(ev.pointerId);
+    el.classList.add("turning");
+    const y0 = ev.clientY, v0 = Number(el.dataset.v);
+    el.onpointermove = (m) => turnTo(v0 + Math.round((y0 - m.clientY) / (m.shiftKey ? pxPerStep * 4 : pxPerStep)));
+    el.onpointerup = el.onpointercancel = async () => {
+      el.onpointermove = null;
+      el.classList.remove("turning");
+      if (timer != null) { clearTimeout(timer); timer = null; }
+      if (pending != null) { const v = pending; pending = null; await edit(knobEdit(el, v), false); }
+      render();
+    };
+  };
+  el.onwheel = (ev) => { ev.preventDefault(); turnTo(Number(el.dataset.v) + (ev.deltaY < 0 ? 1 : -1)); };
+  el.onkeydown = (ev) => {
+    const step = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1, PageUp: 10, PageDown: -10 }[ev.key];
+    if (step != null) { ev.preventDefault(); turnTo(Number(el.dataset.v) + step); }
+    else if (ev.key === "Home") turnTo(lo);
+    else if (ev.key === "End") turnTo(hi);
+  };
 }
 function startRename(i: number, cell: HTMLElement) {
   const slot = bank.slots[i];

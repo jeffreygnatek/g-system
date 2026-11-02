@@ -3,8 +3,6 @@
   "private": true,
   "description": "Renders the app frontend with a mocked backend and saves README screenshots",
   "dependencies": {
-    "@fontsource/inter": "5.1.0",
-    "@fontsource/jetbrains-mono": "5.1.0",
     "playwright": "^1.48.0"
   }
 }
