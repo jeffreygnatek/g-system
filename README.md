@@ -12,8 +12,9 @@ runs on current operating systems.
 > from that project (credited in each file and in `PROTOCOL.md`).
 
 Status: **reading works; presets reach the unit through its own Store button.** Banks and presets
-load from `.SQS`/`.syx` files and from the unit over MIDI. The unit's own USB
-port shows up as a MIDI device, so no interface is needed. Every effect block,
+load from `.SQS`/`.syx` files and from the unit over MIDI (see
+[Connecting the G-System](#connecting-the-g-system): **on a Mac you need a
+USB-MIDI interface**; the unit's own USB port works on Linux). Every effect block,
 type and parameter is decoded and editable, along with routing, loops, insert,
 boost, tempo, modifier (pedal/encoder) assignments and the NovaDrive preset.
 Global settings and footswitch assignments are read from the unit.
@@ -192,10 +193,45 @@ is not expanded there):
 During development, run it from the repo with
 `cargo run -q -p gsys -- mcp --bank /tmp/agent.syx`.
 
+## Connecting the G-System
+
+| Computer | The unit's USB port | USB-MIDI interface on the 5-pin jacks |
+|---|---|---|
+| **macOS** | **Doesn't work** (see below) | Works |
+| **Linux** | Works: shows up as an ALSA MIDI port named G-System | Works |
+| **Android** | Works with an OTG cable ([davidavalanches/gsystem-editor](https://davidavalanches.github.io/gsystem-editor/)) | Works |
+| **Windows** | Untested | Should work |
+
+**With an interface:** any class-compliant USB-MIDI interface will do (for
+example a Roland UM-ONE mk2). Cable the interface's **OUT** to the G-System's
+**MIDI IN** and the G-System's **MIDI OUT** to the interface's **IN**, then
+pick the interface in both of the app's port lists, or give its name to `gsys`.
+
+**Why the unit's USB port doesn't work on a Mac.** The Mac sees the unit
+(System Information → USB lists "G-System", TC Electronic `0x1220:0x0005`), but
+its USB descriptors break the USB-MIDI standard twice:
+- they have no Audio Control interface, so macOS creates no MIDI port;
+- they declare bulk endpoints with 4-byte packets, which full-speed USB
+  doesn't allow.
+
+The editor can open the interface directly (`gsys usb-info` shows the
+descriptors), but current macOS never sets up those endpoints: transfers fail
+with "pipe ref not recognized" (`0xe0004061`). TC's original 2008 software
+needed its own Mac driver, and today's macOS no longer loads drivers of that
+kind. Linux and Android tolerate both problems, so the same cable works there.
+Details are in [`PROTOCOL.md`](PROTOCOL.md#transport).
+
+**Linux.** After plugging in, `aconnect -l` (or `gsys ports`) should list a
+G-System port. If it doesn't, check that your user can use MIDI devices
+(usually membership of the `audio` group). If no MIDI port appears but the unit
+is on USB, the port name `usb` makes `gsys` and the app open it directly
+(`gsys usb-info` to troubleshoot); that needs permission to the USB device,
+for example a udev rule for vendor `1220`.
+
 ## First session with the unit
 
-1. Connect the G-System's USB port to the computer (or a USB-MIDI interface to its 5-pin jacks).
-2. `gsys ports`, then `gsys identify G-System`.
+1. Connect the unit (see above).
+2. `gsys ports`, then `gsys identify G-System` (or the interface's name, e.g. `gsys identify UM-ONE`).
 3. `gsys backup G-System my-unit.syx` reads all 200 user slots (about 2½ minutes; empty slots are skipped).
 4. Open `my-unit.syx` in the app, or use the app's Connect screen to do the same thing.
 5. Try `gsys audition G-System my-unit.syx 0`, or the app's *Audition* / *Live*, and
