@@ -3,7 +3,7 @@
 //! `serde` feature.
 
 use crate::preset::{slot_label, Preset};
-use crate::{levels, params, tempo};
+use crate::{globals, levels, modifiers, novadrive, params, switches, tempo};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RowView {
@@ -36,6 +36,21 @@ pub struct ChainView {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct ModifierView {
+    pub slot: usize,
+    /// Block key ("delay"…) or "novadrive".
+    pub key: &'static str,
+    pub label: String,
+    /// Index into `sources`.
+    pub source: u8,
+    pub min: u8,
+    pub mid: u8,
+    pub max: u8,
+    /// e.g. "Exp · 0 → 100 %", or "None".
+    pub display: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PresetView {
     pub index: usize,
     pub label: String,
@@ -49,6 +64,11 @@ pub struct PresetView {
     pub boost: bool,
     pub boost_level: i32,
     pub bpm: Option<i32>,
+    /// Modifier slots for the current effect types (NovaDrive's included).
+    pub modifiers: Vec<ModifierView>,
+    pub sources: Vec<&'static str>,
+    /// NovaDrive NDR-1 preset recalled with this preset: 1-18, 0 = none.
+    pub nova_preset: i32,
 }
 
 /// Front-panel order, plus EQ and Gate.
@@ -148,22 +168,148 @@ pub fn preset_view(index: usize, p: &Preset) -> PresetView {
         insert: lv.insert,
         boost: lv.boost,
         boost_level: lv.boost_level,
+        modifiers: modifiers::modifier_targets(p, true)
+            .into_iter()
+            .map(|t| {
+                let m = t.modifier;
+                ModifierView {
+                    slot: t.slot,
+                    key: t.key,
+                    label: params::label(&t.name),
+                    source: m.source,
+                    min: m.min,
+                    mid: m.mid,
+                    max: m.max,
+                    display: if m.source == 0 {
+                        "None".into()
+                    } else {
+                        format!(
+                            "{} · {} / {} / {} %",
+                            modifiers::SOURCES.get(m.source as usize).unwrap_or(&"?"),
+                            m.min,
+                            m.mid,
+                            m.max
+                        )
+                    },
+                }
+            })
+            .collect(),
+        sources: modifiers::SOURCES.to_vec(),
+        nova_preset: novadrive::nova_preset(p),
         bpm: tempo::preset_tempo_ms(p)
             .filter(|&ms| ms > 0)
             .map(tempo::ms_to_bpm),
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GlobalView {
+    pub block: u8,
+    pub param: u16,
+    pub name: &'static str,
+    pub help: &'static str,
+    /// None when the unit didn't report this parameter.
+    pub value: Option<i32>,
+    pub display: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GlobalGroupView {
+    pub title: &'static str,
+    pub params: Vec<GlobalView>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SwitchView {
+    /// 1-based footswitch number.
+    pub number: usize,
+    pub display: String,
+    pub fixed: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GlobalsView {
+    pub groups: Vec<GlobalGroupView>,
+    pub switches: Vec<SwitchView>,
+}
+
+/// Build the Global screen from `(block, param) → raw value` read from the unit.
+pub fn globals_view(read: &std::collections::HashMap<(u8, u16), i32>) -> GlobalsView {
+    let groups = globals::GLOBAL_GROUPS
+        .iter()
+        .map(|g| GlobalGroupView {
+            title: g.title,
+            params: g
+                .params
+                .iter()
+                .map(|gp| {
+                    let value = read.get(&(gp.block, gp.param)).map(|&raw| gp.value(raw));
+                    GlobalView {
+                        block: gp.block,
+                        param: gp.param,
+                        name: gp.name,
+                        help: gp.help,
+                        value,
+                        display: value.map(|v| gp.format(v)).unwrap_or_else(|| "—".into()),
+                    }
+                })
+                .collect(),
+        })
+        .collect();
+    let switches = (0..switches::SWITCH_COUNT)
+        .map(|i| {
+            let fixed = switches::fixed_switch(i);
+            let display = match fixed {
+                Some(f) => f.to_string(),
+                None => read
+                    .get(&(switches::SWITCH_BLOCK, switches::SWITCH_FIRST + i as u16))
+                    .map(|&v| switches::describe_switch(switches::decode_switch(v)))
+                    .unwrap_or_else(|| "—".into()),
+            };
+            SwitchView {
+                number: i + 1,
+                display,
+                fixed: fixed.is_some(),
+            }
+        })
+        .collect();
+    GlobalsView { groups, switches }
+}
+
 /// One edit to a preset, as sent by the UI.
 #[derive(serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Edit {
-    Field { field: usize, value: i32 },
-    Type { block: String, value: usize },
-    Toggle { key: String },
-    Routing { value: usize },
-    BoostLevel { value: i32 },
-    Bpm { value: i32 },
+    Field {
+        field: usize,
+        value: i32,
+    },
+    Type {
+        block: String,
+        value: usize,
+    },
+    Toggle {
+        key: String,
+    },
+    Routing {
+        value: usize,
+    },
+    BoostLevel {
+        value: i32,
+    },
+    Bpm {
+        value: i32,
+    },
+    Modifier {
+        slot: usize,
+        source: u8,
+        min: u8,
+        mid: u8,
+        max: u8,
+    },
+    Nova {
+        value: i32,
+    },
 }
 
 /// Apply one edit. Values are clamped to the parameter's range, and delay
@@ -201,6 +347,28 @@ pub fn apply(p: &mut Preset, edit: Edit) -> Result<(), String> {
         Edit::Routing { value } => levels::set_routing(p, value),
         Edit::BoostLevel { value } => levels::set_boost_level(p, value),
         Edit::Bpm { value } => tempo::set_tempo_ms(p, tempo::bpm_to_ms(value.clamp(20, 600))),
+        Edit::Modifier {
+            slot,
+            source,
+            min,
+            mid,
+            max,
+        } => {
+            if slot >= modifiers::MODIFIER_SLOTS || source as usize >= modifiers::SOURCES.len() {
+                return Err("bad modifier".into());
+            }
+            modifiers::write_modifier(
+                p,
+                slot,
+                modifiers::Modifier {
+                    source,
+                    min: min.min(100),
+                    mid: mid.min(100),
+                    max: max.min(100),
+                },
+            );
+        }
+        Edit::Nova { value } => novadrive::write_nova_preset(p, value),
     }
     Ok(())
 }

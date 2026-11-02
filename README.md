@@ -15,7 +15,8 @@ Status: **reading works; writing to the unit is disabled.** Banks and presets
 load from `.SQS`/`.syx` files and from the unit over MIDI. The unit's own USB
 port shows up as a MIDI device, so no interface is needed. Every effect block,
 type and parameter is decoded and editable, along with routing, loops, insert,
-boost and tempo. Storing presets is turned off in the app because the
+boost, tempo, modifier (pedal/encoder) assignments and the NovaDrive preset.
+Global settings and footswitch assignments are read from the unit. Storing presets is turned off in the app because the
 store sequence the original editor uses can freeze the G-System; see
 `PROTOCOL.md` → "Storing presets".
 
@@ -44,7 +45,7 @@ units and ranges from the firmware tables.
 <table>
 <tr>
 <td width="50%"><b>Connect</b> — replaces the old AutoSense dialogs<br><img src="docs/screenshots/connect.png" alt="Connect view"></td>
-<td width="50%"><b>Global</b> — MIDI, tuner, levels, pedals, locks, switches<br><img src="docs/screenshots/global.png" alt="Global view"></td>
+<td width="50%"><b>Global</b> — reads levels, locks, pedals, MIDI, tuner and footswitches from the unit<br><img src="docs/screenshots/global.png" alt="Global view"></td>
 </tr>
 </table>
 
@@ -94,6 +95,7 @@ gsys rename <in.syx> <slot> "<name>" <out.syx>
 
 gsys ports
 gsys identify <port>             firmware version, via Device Inquiry
+gsys globals <port>              global settings and footswitch assignments (read-only)
 gsys monitor <port>
 gsys request <port> <slot>
 gsys backup  <port> <out.syx> [from] [to]

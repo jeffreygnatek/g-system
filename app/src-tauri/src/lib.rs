@@ -279,6 +279,51 @@ impl Midi {
     }
 }
 
+/// Read the unit's global settings and footswitch assignments (55 47
+/// requests, read-only).
+#[tauri::command]
+fn midi_globals(input: String, output: String) -> Result<view::GlobalsView, String> {
+    let mut m = Midi::open(&input, &output)?;
+    let mut read = std::collections::HashMap::new();
+    for (block, first, count) in gsystem_protocol::globals::GLOBAL_RANGES {
+        while m.rx.try_recv().is_ok() {}
+        m.out
+            .send(
+                &Message::RequestParams {
+                    device: 0,
+                    block,
+                    first,
+                    count,
+                }
+                .encode(),
+            )
+            .map_err(|e| e.to_string())?;
+        let deadline = Instant::now() + Duration::from_millis(1500);
+        while (first..first + count).any(|p| !read.contains_key(&(block, p))) {
+            let Ok(bytes) =
+                m.rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            else {
+                break;
+            };
+            if let Ok(Message::SetParam {
+                block: b,
+                param,
+                values,
+                ..
+            }) = Message::parse(&bytes)
+            {
+                for (i, v) in values.into_iter().enumerate() {
+                    read.insert((b, param + i as u16), v);
+                }
+            }
+        }
+    }
+    if read.is_empty() {
+        return Err("The unit didn't answer the globals request".into());
+    }
+    Ok(view::globals_view(&read))
+}
+
 /// Ask the unit to identify itself (Universal Device Inquiry).
 #[tauri::command]
 fn midi_identify(input: String, output: String) -> Result<String, String> {
@@ -356,6 +401,7 @@ pub fn run() {
             edit_preset,
             midi_ports,
             midi_identify,
+            midi_globals,
             midi_backup,
             midi_send
         ])

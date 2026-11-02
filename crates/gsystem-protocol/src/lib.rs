@@ -8,9 +8,14 @@
 //! Transport (MIDI, HID) lives in other crates.
 
 pub mod bank;
+pub mod empty;
+pub mod globals;
 pub mod levels;
+pub mod modifiers;
+pub mod novadrive;
 pub mod params;
 pub mod preset;
+pub mod switches;
 pub mod sysex;
 pub mod syx;
 pub mod tempo;

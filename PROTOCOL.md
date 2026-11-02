@@ -8,9 +8,10 @@ Sources, and how much to trust each line:
 - **[DA]** the independent
   [davidavalanches/gsystem-editor](https://github.com/davidavalanches/gsystem-editor)
   project (GPL-3.0, © David Avalanches), tested against a real unit. Its
-  parameter tables, levels and tempo code are ported to Rust here
-  (`params.rs`, `levels.rs`, `tempo.rs`, from commit 9b50ef8), with credit in
-  each file. Their project is
+  parameter tables, levels, tempo, modifiers, NovaDrive, switches, globals
+  and empty-preset code are ported to Rust here (`params.rs`, `levels.rs`,
+  `tempo.rs`, `modifiers.rs`, `novadrive.rs`, `switches.rs`, `globals.rs`,
+  `empty.rs`, from commit 9b50ef8), with credit in each file. Their project is
   further along than ours. If you just want a working editor, use theirs:
   <https://davidavalanches.github.io/gsystem-editor/>.
 
@@ -66,7 +67,10 @@ param `0x1D`). We first misread it as a preset request.
   Which parameters follow the type depends on it; the full tables (names,
   ranges, value lists, from firmware 4.02) are in
   `crates/gsystem-protocol/src/params.rs`, ported from DA's `params.ts`.
-- Fields 125–164: modifier/pedal assignments (not ported yet).
+- Fields 125–162: 38 modifier slots (pedal/encoder → parameter, min/mid/max %),
+  grouped by block and following each effect type's controllable parameters
+  **[DA]** → `modifiers.rs`. Fields 163–164: NovaDrive NDR-1 preset behind an
+  extension header **[DA]** → `novadrive.rs`.
 
 Older presets store fewer parameters than the 4.02 tables list (the count
 field says how many; e.g. "Scotty's Blues" Auto Wah has 11, without AutoOn).
@@ -116,8 +120,18 @@ FORM <len> "BANK"
              (slots ≥ 10 have the 10-byte header zeroed). "Preset": routing data.
 ```
 
+## Global settings [DA]
+
+Not stored in presets. Read with `55 47` requests over four ranges
+(`globals::GLOBAL_RANGES`): block 1 params 0–29 (levels, locks), block 5
+params 3–25 (utility, pedals, MIDI, tuner), block 13 param 58 (Volume Ctrl.),
+block 5 params 226–243 (footswitches #1–#18, see `switches.rs`). The unit
+answers with `22` messages. `gsys globals` and the app's Global screen use
+this; both are read-only.
+
 ## Still open
 
-- Not yet ported from DA: modifiers (fields 125–164), footswitch assignments,
-  globals, NovaDrive. All exist in their code.
+- Program map (block 5, params 26–153): not decoded here or by DA yet.
+- Writing global settings and footswitch assignments (DA does this with `22`
+  messages; here they're read-only for now).
 - A store sequence that doesn't risk freezing the unit.

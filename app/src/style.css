@@ -222,3 +222,14 @@ aside.inspector {
 .loops4 > button { padding: 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); text-align: left; }
 .loops4 > button.on { background: var(--amber-bg); border-color: var(--amber-line); }
 .loops4 > button.on .k, .loops4 > button.on .v { color: var(--amber); }
+
+/* modifiers inside block cards */
+details.mods { border-top: 1px solid var(--line); padding-top: 10px; }
+details.mods summary { cursor: pointer; font-size: 12px; color: var(--text-2); list-style: none; }
+details.mods summary::-webkit-details-marker { display: none; }
+details.mods summary::before { content: "▸ "; color: var(--muted); }
+details.mods[open] summary::before { content: "▾ "; }
+.mrow { display: grid; grid-template-columns: 1fr 78px repeat(3, 48px); gap: 6px; align-items: center; margin-top: 8px; }
+.mrow .ml { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mrow input { height: 28px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--bg); padding: 0 6px; font-family: var(--mono); font-size: 12px; width: 100%; }
+.mrow input:disabled { opacity: .4; }

@@ -25,6 +25,7 @@ File commands (offline):
 MIDI commands (<port> matches by name, e.g. \"G-System\"; in and out may differ):
   gsys ports                                list MIDI in/out ports
   gsys identify <port> [<out-port>]         ask the unit for its firmware version
+  gsys globals <port>                       read global settings and footswitch assignments
   gsys monitor <port>                       print every G-System message received
   gsys request <port> <slot>                read one user preset and print it
   gsys backup <port> <out.syx> [from] [to]  read user slots from..to (default all) into a .syx
@@ -148,6 +149,25 @@ fn main() {
                 }
             }
         }
+        "globals" => {
+            let mut sess = midi::Session::open(a(1), a(1));
+            let read = sess.read_globals();
+            if read.is_empty() {
+                eprintln!("no answer from the unit");
+                std::process::exit(1)
+            }
+            let v = gsystem_protocol::view::globals_view(&read);
+            for g in v.groups {
+                println!("{}", g.title);
+                for p in g.params {
+                    println!("  {:<18} {}", p.name, p.display);
+                }
+            }
+            println!("Footswitches");
+            for sw in v.switches {
+                println!("  #{:<3} {}", sw.number, sw.display);
+            }
+        }
         "request" => {
             let slot: usize = a(2).parse().unwrap_or_else(|_| usage());
             let mut sess = midi::Session::open(a(1), a(1));
@@ -255,6 +275,28 @@ fn print_preset(slot: usize, p: &gsystem_protocol::Preset) {
     );
     if let Some(ms) = tempo::preset_tempo_ms(p) {
         println!("  tempo {} BPM ({ms} ms)", tempo::ms_to_bpm(ms));
+    }
+    let nova = gsystem_protocol::novadrive::nova_preset(p);
+    if nova > 0 {
+        println!("  NovaDrive preset {nova}");
+    }
+    let mods: Vec<_> = gsystem_protocol::modifiers::modifier_targets(p, nova > 0)
+        .into_iter()
+        .filter(|t| t.modifier.source != 0)
+        .collect();
+    for t in &mods {
+        let m = t.modifier;
+        println!(
+            "  modifier {} → {} {}: {} / {} / {} %",
+            gsystem_protocol::modifiers::SOURCES
+                .get(m.source as usize)
+                .unwrap_or(&"?"),
+            t.key,
+            params::label(&t.name),
+            m.min,
+            m.mid,
+            m.max
+        );
     }
     for b in params::BLOCKS.iter() {
         let ty = b

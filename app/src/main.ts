@@ -10,6 +10,12 @@ type ChainView = { key: string; name: string; on: boolean; summary: string };
 type Detail = {
   index: number; label: string; name: string; chain: ChainView[]; blocks: BlockView[];
   routing: number; routings: string[]; loops: boolean[]; insert: boolean; boost: boolean; boost_level: number; bpm: number | null;
+  modifiers: ModView[]; sources: string[]; nova_preset: number;
+};
+type ModView = { slot: number; key: string; label: string; source: number; min: number; mid: number; max: number; display: string };
+type GlobalsView = {
+  groups: { title: string; params: { name: string; help: string; value: number | null; display: string }[] }[];
+  switches: { number: number; display: string; fixed: boolean }[];
 };
 type Edit =
   | { kind: "field"; field: number; value: number }
@@ -17,7 +23,9 @@ type Edit =
   | { kind: "toggle"; key: string }
   | { kind: "routing"; value: number }
   | { kind: "boost_level"; value: number }
-  | { kind: "bpm"; value: number };
+  | { kind: "bpm"; value: number }
+  | { kind: "modifier"; slot: number; source: number; min: number; mid: number; max: number }
+  | { kind: "nova"; value: number };
 type Ports = { inputs: string[]; outputs: string[] };
 type View = "connect" | "banks" | "preset" | "global";
 
@@ -34,6 +42,8 @@ let portIn = "";
 let portOut = "";
 let unit: { connected: boolean; progress?: string; version?: string } = { connected: false };
 let focusBlock: string | null = null;
+let globals: GlobalsView | null = null;
+let globalsBusy = false;
 let status = "";
 let statusErr = false;
 
@@ -291,8 +301,19 @@ function blockCard(b: BlockView): string {
     : `<span style="margin-left:auto"></span>`;
   return `<section class="card ${b.on ? "" : "off"} ${focusBlock === b.key ? "focus" : ""}" id="card-${b.key}" aria-label="${esc(b.label)}">
     <div class="hd"><span class="ttl">${esc(b.label)}</span>${typeSel}<button class="toggle ${b.on ? "on" : ""}" data-toggle="${b.key}" aria-label="${b.on ? "On" : "Off"}"></button></div>
-    <div class="bd">${b.rows.map(paramRow).join("")}</div>
+    <div class="bd">${b.rows.map(paramRow).join("")}${modifierRows(b.key)}</div>
   </section>`;
+}
+function modifierRows(key: string): string {
+  const d = detail;
+  const mods = d ? d.modifiers.filter((m) => m.key === key) : [];
+  if (!d || !mods.length) return "";
+  const row = (m: ModView) => `<div class="mrow" data-mod="${m.slot}">
+      <span class="ml">${esc(m.label)}</span>
+      <select class="sel" data-mod-source aria-label="${esc(m.label)} modifier source">${d.sources.map((s, i) => `<option value="${i}" ${i === m.source ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
+      ${(["min", "mid", "max"] as const).map((k) => `<input type="number" min="0" max="100" value="${m[k]}" data-mod-${k} ${m.source ? "" : "disabled"} aria-label="${esc(m.label)} ${k} %">`).join("")}
+    </div>`;
+  return `<details class="mods" ${mods.some((m) => m.source) ? "open" : ""}><summary>Modifiers <span class="dim">${mods.filter((m) => m.source).length}/${mods.length} assigned · min / mid / max %</span></summary>${mods.map(row).join("")}</details>`;
 }
 function routingCard(d: Detail): string {
   const loops = d.chain.filter((c) => c.key.startsWith("loop") || c.key === "insert").map((c) =>
@@ -306,6 +327,8 @@ function routingCard(d: Detail): string {
       <div class="prow"><label>Boost level</label><input type="range" min="0" max="10" step="1" value="${d.boost_level}" data-boost aria-label="Boost level"><span class="val">${d.boost_level} dB</span></div>
       <div class="prow"><label>Tempo</label><input type="number" min="20" max="600" value="${d.bpm ?? ""}" data-bpm class="sel" aria-label="Tempo in BPM" style="width:90px"><span class="val">BPM</span></div>
       <div class="note">Tempo sets every tap time; delay times and speeds with a note value follow it.</div>
+      <div class="prow"><label>NovaDrive</label><select class="sel" data-nova aria-label="NovaDrive NDR-1 preset">${Array.from({ length: 19 }, (_, i) => `<option value="${i}" ${i === d.nova_preset ? "selected" : ""}>${i ? `Preset ${i}` : "None"}</option>`).join("")}</select><span class="val"></span></div>
+      ${modifierRows("novadrive")}
     </div>
   </section>`;
 }
@@ -322,20 +345,22 @@ function presetView(): string {
 
 // ---------------------------------------------------------------- global view
 function globalView(): string {
-  const card = (title: string, rows: [string, string][], note?: string) =>
-    `<section class="card"><div class="hd"><span class="ttl">${title}</span></div><div class="bd"><div class="kv">${rows.map(([k, v]) => `<span class="k">${k}</span><span class="v">${v}</span>`).join("")}</div>${note ? `<div class="note">${note}</div>` : ""}</div></section>`;
-  const u = "—";
+  if (!globals) {
+    return `<main class="body"><div class="centered"><div class="connect">
+      <div><h1>Global settings</h1><p>These live on the unit, not in presets: levels, locks, pedals, MIDI, tuner and the footswitch assignments. Reading them doesn't change anything on the unit.</p></div>
+      <div class="rowbtns"><button class="btn primary" id="readglobals" ${unit.connected && !globalsBusy ? "" : "disabled"}>${globalsBusy ? "Reading…" : "Read from unit"}</button>
+      ${unit.connected ? "" : `<a href="#" id="toconnect2">Connect a G-System first</a>`}</div>
+      <div class="status ${statusErr ? "err" : ""}">${esc(status)}</div>
+    </div></div></main>`;
+  }
+  const card = (title: string, rows: string) => `<section class="card"><div class="hd"><span class="ttl">${esc(title)}</span></div><div class="bd"><div class="kv">${rows}</div></div></section>`;
+  const groups = globals.groups.map((g) => card(g.title, g.params.map((p) =>
+    `<span class="k" title="${esc(p.help)}">${esc(p.name)}</span><span class="v">${esc(p.display)}</span>`).join(""))).join("");
+  const sw = card("Footswitches", globals.switches.map((s) =>
+    `<span class="k">#${s.number}</span><span class="v ${s.fixed ? "dim" : ""}">${esc(s.display)}</span>`).join(""));
   return `
-    <div class="banner">Global settings come from the unit's <span class="mono">22 05</span> system dump, which isn't decoded yet. This page shows the layout; values fill in once the dump format is confirmed from a live capture.</div>
-    <main class="gcols">
-      ${card("MIDI", [["Channel", u], ["Program change in", u], ["Program change out", u], ["Encoder A / B / C CC", u], ["Tap tempo CC", u], ["SysEx ID", u]])}
-      ${card("Tuner", [["Output", u], ["Reference", u], ["Mode", u]])}
-      ${card("Global levels", [["Routing", u], ["Guitar input", u], ["Input sensitivity", u], ["Loop level", u], ["Loop headroom", u], ["Volume", u], ["Output level", u], ["Boost max", u], ["Kill dry", u]])}
-      ${card("Pedals", [["Master volume assignment", u], ["GFX1 volume pedal", u], ["GFX1 expression pedal", u], ["Controller volume pedal", u], ["Controller expression pedal", u], ["Volume master", u], ["Expression master", u]])}
-      ${card("Locks", [["Boost", u], ["EQ", u], ["Insert", u], ["Relay", u], ["Routing", u], ["Factory bank select", u]])}
-      ${card("Switches", [["1–5", u], ["6–12", u], ["13–18", u]], "Per-footswitch assignment: effect toggle, preset, or MIDI CC.")}
-      ${card("Program map", [["Banks 00–19", u], ["Banks 20–39", u]], "Incoming MIDI program → preset slot. Shown as a 200-row table once decoded.")}
-    </main>`;
+    <div class="banner">Read from the unit. Editing global settings isn't supported yet; change them on the unit's front panel.</div>
+    <main class="gcols">${groups}${sw}</main>`;
 }
 
 // ---------------------------------------------------------------- connect view
@@ -454,6 +479,27 @@ function wire() {
   document.querySelectorAll<HTMLSelectElement>("[data-routing]").forEach((el) => (el.onchange = () => edit({ kind: "routing", value: Number(el.value) })));
   document.querySelectorAll<HTMLInputElement>("[data-boost]").forEach((el) => (el.onchange = () => edit({ kind: "boost_level", value: Number(el.value) })));
   document.querySelectorAll<HTMLInputElement>("[data-bpm]").forEach((el) => (el.onchange = () => edit({ kind: "bpm", value: Number(el.value) })));
+  document.querySelectorAll<HTMLSelectElement>("[data-nova]").forEach((el) => (el.onchange = () => edit({ kind: "nova", value: Number(el.value) })));
+  document.querySelectorAll<HTMLElement>("[data-mod]").forEach((row) => {
+    const slot = Number(row.dataset.mod);
+    const q = (sel: string) => row.querySelector<HTMLInputElement | HTMLSelectElement>(sel)!;
+    const send = () => edit({ kind: "modifier", slot, source: Number(q("[data-mod-source]").value),
+      min: Number(q("[data-mod-min]").value), mid: Number(q("[data-mod-mid]").value), max: Number(q("[data-mod-max]").value) });
+    row.querySelectorAll("select, input").forEach((el) => ((el as HTMLInputElement).onchange = send));
+  });
+  on("readglobals", async () => {
+    globalsBusy = true;
+    render();
+    try {
+      globals = await invoke<GlobalsView>("midi_globals", { input: portIn, output: portOut });
+      setStatus("");
+    } catch (e) {
+      setStatus(String(e), true);
+    }
+    globalsBusy = false;
+    render();
+  });
+  on("toconnect2", () => go("connect"));
 }
 function startRename(i: number, cell: HTMLElement) {
   const slot = bank.slots[i];

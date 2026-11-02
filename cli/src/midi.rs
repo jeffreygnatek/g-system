@@ -155,6 +155,46 @@ impl Session {
         }
     }
 
+    /// Read the unit's global settings and footswitch assignments with
+    /// `55 47` requests (read-only; this is how Vyzor reads them).
+    pub fn read_globals(&mut self) -> std::collections::HashMap<(u8, u16), i32> {
+        let mut out = std::collections::HashMap::new();
+        for (block, first, count) in gsystem_protocol::globals::GLOBAL_RANGES {
+            self.drain();
+            self.send(
+                &Message::RequestParams {
+                    device: 0,
+                    block,
+                    first,
+                    count,
+                }
+                .encode(),
+            );
+            let want = first..first + count;
+            let deadline = Instant::now() + Duration::from_millis(1500);
+            while (want.clone()).any(|p| !out.contains_key(&(block, p))) {
+                let Ok(bytes) = self
+                    .rx
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                else {
+                    break;
+                };
+                if let Ok(Message::SetParam {
+                    block: b,
+                    param,
+                    values,
+                    ..
+                }) = Message::parse(&bytes)
+                {
+                    for (i, v) in values.into_iter().enumerate() {
+                        out.insert((b, param + i as u16), v);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Store `preset` into user slot `slot`, the way Vyzor's Sync does it, then
     /// read the slot back to verify.
     ///
