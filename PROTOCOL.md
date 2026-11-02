@@ -44,7 +44,7 @@ unit's SysEx ID (Global › MIDI) or `7F` for any device.
 |---|---|---|---|
 | `20` | `01 <num:2> <1032 nibbles> <chk>` | preset dump (1044 bytes total) | ours, DA |
 | `45` | `01 <num:2>` | request a stored preset; answered by a `20` dump in ~0.77 s. Empty slots never answer; the unit ignores requests while busy | DA |
-| `28` | `<num:2> 00 01` | the unit's answer for a damaged slot | DA |
+| `28` | `<num:2> 00 01` | the unit's answer for a damaged slot **[DA]**, and also for a slot that was **never written**: Jeff's unit answers `28` for every empty user slot, and storing a preset there (on the unit) makes it answer with a normal dump **[ours]** | DA, ours |
 | `22` | `<block> <param:2> <value:6 nibbles>…` | set an edit-buffer parameter (signed 24-bit, MSB nibble first). The unit sends these too when a switch or knob is used. Writes need device `7F` | DA; framing ours |
 | `47` | `<block> <first:2> <count:2>` | request parameters; answered with `22` messages (how Vyzor reads globals) | DA; seen in Vyzor's `.Prs` scripts |
 | `57` | `00` / `01` | begin / end a preset store | DA; seen in Vyzor's scripts |
@@ -53,7 +53,9 @@ unit's SysEx ID (Global › MIDI) or `7F` for any device.
 
 `<num:2>` and `<param:2>` are 14-bit values, high 7 bits first. **User slot
 `n` (0..200) is wire preset number `n + 100`.** The 200 user slots are banks
-00–39; the factory bank (0..99) is read-only on the unit. The `22 01 00 1D …
+00–39; the factory bank (0..99) is read-only on the unit and shows on its
+display as banks **A0–A9, B0–B9** (so "A1-1" is a factory preset). A new unit's
+user bank is empty (Vyzor's manual). The `22 01 00 1D …
 01` message at the start of every Vyzor script is "editor mode on" (block 1,
 param `0x1D`). We first misread it as a preset request.
 

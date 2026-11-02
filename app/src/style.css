@@ -233,7 +233,7 @@ aside.inspector {
 .readbar .bar > div { height: 100%; background: var(--accent); transition: width .3s; }
 .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: spin 1s linear infinite; }
 .cell.pending .nm { color: var(--muted-2); }
-.cell.damaged .nm { color: #e0533e; font-style: italic; font-family: var(--sans); font-size: 12.5px; }
+.cell.damaged .nm { color: var(--muted-2); font-style: italic; font-family: var(--sans); font-size: 12.5px; }
 .cell.reading { box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft); }
 .cell.reading .nm { color: var(--accent); }
 .cell.arrived { animation: arrive .8s ease-out; }

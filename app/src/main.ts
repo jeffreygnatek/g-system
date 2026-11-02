@@ -52,7 +52,8 @@ let live = false;
 let pedalSlot: number | null = null;
 // A bank read in progress (the unit answers about one preset per second).
 type Reading = { done: number; total: number; found: number; slot?: number; name?: string | null; damaged?: boolean };
-// Slots the unit reported as damaged in the last read (its own memory, not the file).
+// Slots the unit answered with "damaged" (28) in the last read. On Jeff's unit
+// that means "never written": storing into one on the unit fills it.
 let damagedSlots = new Set<number>();
 let reading: Reading | null = null;
 let readFrom = 0; // first slot of the read in progress
@@ -211,7 +212,7 @@ function showProgress() {
         cell.classList.add("arrived");
         cell.draggable = true;
       } else if (r.damaged) {
-        nm.textContent = "damaged on unit";
+        nm.textContent = "empty";
         cell.classList.add("damaged");
       } else {
         nm.textContent = "—";
@@ -250,7 +251,7 @@ async function midiBackup(from: number, to: number) {
     await refresh();
     const parts = [
       got.length ? `Received ${got.length} preset${got.length === 1 ? "" : "s"}` : "No presets received",
-      res.damaged.length ? `${res.damaged.length} slot${res.damaged.length === 1 ? "" : "s"} damaged on the unit` : "",
+      res.damaged.length ? `${res.damaged.length} empty slot${res.damaged.length === 1 ? "" : "s"}` : "",
     ].filter(Boolean);
     setStatus(`${stopped ? "Stopped. " : ""}${parts.join(" · ")}`, !got.length && !stopped);
   } catch (e) {
@@ -369,9 +370,9 @@ function banksView(): string {
       const waiting = reading != null && i >= done && i < readFrom + reading.total;
       const state = waiting ? (i === done ? "reading" : "pending") : "";
       const bad = name == null && damagedSlots.has(i);
-      return `<div class="cell ${selected === i ? "sel" : ""} ${state} ${bad ? "damaged" : ""}" data-i="${i}" draggable="${name != null}" ${bad ? `title="The G-System reports this slot's memory as damaged. Storing a preset into it on the unit may fix it."` : ""}>
+      return `<div class="cell ${selected === i ? "sel" : ""} ${state} ${bad ? "damaged" : ""}" data-i="${i}" draggable="${name != null}" ${bad ? `title="Nothing stored here on the G-System yet (the unit answers 'damaged' for slots that were never written). Store a preset on the unit to fill it."` : ""}>
         <span class="lbl">${s?.label ?? ""}</span>
-        <span class="nm ${name == null ? "empty" : ""}">${name == null ? (waiting ? "…" : bad ? "damaged on unit" : "—") : esc(name)}</span>
+        <span class="nm ${name == null ? "empty" : ""}">${name == null ? (waiting ? "…" : bad ? "empty" : "—") : esc(name)}</span>
         ${dirty.has(i) ? `<span class="dot" title="Changed since last sync"></span>` : ""}
       </div>`;
     }).join("");
