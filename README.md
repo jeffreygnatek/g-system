@@ -16,6 +16,29 @@ testdata/                 Factory_Set.SQS (100 factory presets), Twilight.Prs
 tools/                    gsys_preset_decode.py — the Python prototype of the codec
 ```
 
+## Screenshots
+
+**Banks** — the 200-slot user bank laid out like the footswitches, with a live
+hardware strip (current preset, active switch, which blocks are on) and an
+inspector for the selected preset. Amber dots mark slots that differ from the unit.
+
+![Banks view](docs/screenshots/banks.png)
+
+**Preset** — the signal chain in audio order, then one card per effect block.
+Controls activate as the parameter map in `app/src/model.ts` is filled in.
+
+![Preset view](docs/screenshots/preset.png)
+
+<table>
+<tr>
+<td width="50%"><b>Connect</b> — replaces the old AutoSense dialogs<br><img src="docs/screenshots/connect.png" alt="Connect view"></td>
+<td width="50%"><b>Global</b> — MIDI, tuner, levels, pedals, locks, switches<br><img src="docs/screenshots/global.png" alt="Global view"></td>
+</tr>
+</table>
+
+Screenshots are generated from the real frontend with the factory set loaded;
+see `tools/screenshots`.
+
 ## Installing
 
 Download from the [Releases](https://github.com/jeffreygnatek/g-system/releases) page:

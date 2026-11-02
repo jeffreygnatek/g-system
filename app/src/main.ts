@@ -224,7 +224,7 @@ function inspector(): string {
   }
   const mini = BLOCKS.filter((b) => b.types.length).map((b) => {
     const on = blockOn(b);
-    return `<div class="${on ? "on" : ""}"><div class="k">${esc(b.name)}</div><div class="v">${on === null ? "unmapped" : on ? esc(blockType(b)) : "Off"}</div></div>`;
+    return `<div class="${on ? "on" : ""}"><div class="k">${esc(b.name)}</div><div class="v">${on === null ? "—" : on ? esc(blockType(b)) : "Off"}</div></div>`;
   }).join("");
   const dirty = dirtySet().has(selected!);
   return `<aside class="inspector">
@@ -260,11 +260,15 @@ function unitPanel(): string {
 }
 
 // ---------------------------------------------------------------- preset view
+// Until any field is mapped the banner explains it once; per-row tags only
+// appear when the map is partial, to point at what's still missing.
+const ANY_MAPPED = BLOCKS.some((b) => b.enabledIndex != null || b.typeIndex != null || b.params.some((p) => p.index != null));
+const unmapTag = (text = "unmapped") => (ANY_MAPPED ? `<span class="unmap">${text}</span>` : "");
 function paramRow(p: Param, slot: number | null): string {
   const mapped = p.index != null && detail != null;
   const raw = mapped ? detail!.params_i24[p.index!] : null;
   const val = raw == null ? "—" : formatValue(p, raw);
-  const tag = p.index == null ? `<span class="unmap">unmapped</span>` : "";
+  const tag = p.index == null ? unmapTag() : "";
   if (p.options) {
     const opts = p.options.map((o, i) => `<option value="${i}" ${raw === i ? "selected" : ""}>${esc(o)}</option>`).join("");
     return `<div class="prow ${mapped ? "" : "unmapped"}"><label>${esc(p.label)}${tag}</label><select class="sel" data-slot="${slot}" data-param="${p.index}" ${mapped ? "" : "disabled"}>${opts}</select><span class="val"></span></div>`;
@@ -277,7 +281,7 @@ function paramRow(p: Param, slot: number | null): string {
   </div>`;
 }
 function tempoChips(): string {
-  return `<div class="prow"><label>Tempo<span class="unmap">unmapped</span></label><div class="chips">${TEMPO_DIVISIONS.map((d, i) => `<button class="chip ${i === 0 ? "on" : ""}" disabled>${esc(d)}</button>`).join("")}</div><span class="val"></span></div>`;
+  return `<div class="prow"><label>Tempo${unmapTag()}</label><div class="chips">${TEMPO_DIVISIONS.map((d, i) => `<button class="chip ${i === 0 ? "on" : ""}" disabled>${esc(d)}</button>`).join("")}</div><span class="val"></span></div>`;
 }
 function blockCard(b: Block): string {
   const on = blockOn(b);
@@ -286,14 +290,14 @@ function blockCard(b: Block): string {
     ? `<select class="sel" data-type="${b.typeIndex}" ${b.typeIndex == null ? "disabled" : ""} aria-label="${esc(b.title)} type">${b.types.map((t, i) => `<option value="${i}" ${t === type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`
     : `<span style="margin-left:auto"></span>`;
   return `<section class="card ${on === false ? "off" : ""} ${focusBlock === b.id ? "focus" : ""}" id="card-${b.id}" aria-label="${esc(b.title)}">
-    <div class="hd"><span class="ttl">${esc(b.title)}${b.enabledIndex == null ? `<span class="unmap">on/off unmapped</span>` : ""}</span>${typeSel}<button class="toggle ${on ? "on" : ""}" data-toggle="${b.enabledIndex}" ${b.enabledIndex == null ? "disabled" : ""} aria-label="${on ? "On" : "Off"}"></button></div>
+    <div class="hd"><span class="ttl">${esc(b.title)}${b.enabledIndex == null ? unmapTag("on/off unmapped") : ""}</span>${typeSel}<button class="toggle ${on ? "on" : ""}" data-toggle="${b.enabledIndex}" ${b.enabledIndex == null ? "disabled" : ""} aria-label="${on ? "On" : "Off"}"></button></div>
     <div class="bd">${b.params.map((p) => paramRow(p, selected)).join("")}${b.tempo ? tempoChips() : ""}</div>
   </section>`;
 }
 function routingCard(): string {
   const loops = BLOCKS.filter((b) => b.id.startsWith("loop")).map((b) => {
     const on = blockOn(b);
-    return `<div class="${on ? "on" : ""}"><div class="k">${esc(b.name)}</div><div class="v">${on === null ? "unmapped" : on ? "On" : "Off"}</div></div>`;
+    return `<div class="${on ? "on" : ""}"><div class="k">${esc(b.name)}</div><div class="v">${on === null ? "—" : on ? "On" : "Off"}</div></div>`;
   }).join("");
   const r = PRESET_MISC.routing;
   const rawR = detail && r.index != null ? detail.params_i24[r.index] : null;
@@ -313,7 +317,7 @@ function presetView(): string {
   if (!s || !detail) return `<main class="body"><div class="centered"><div class="note">Pick a preset in Banks first.</div></div></main>`;
   const tiles = BLOCKS.map((b) => {
     const on = blockOn(b);
-    return `<button class="tile ${on ? "on" : ""} ${focusBlock === b.id ? "focus" : ""}" data-block="${b.id}"><span class="t">${esc(b.name)}<i></i></span><span class="s">${esc(blockType(b) || (on === null ? "unmapped" : on ? "On" : "Off"))}</span></button>`;
+    return `<button class="tile ${on ? "on" : ""} ${focusBlock === b.id ? "focus" : ""}" data-block="${b.id}"><span class="t">${esc(b.name)}<i></i></span><span class="s">${esc(blockType(b) || (on === null ? "—" : on ? "On" : "Off"))}</span></button>`;
   }).join("");
   const cards = BLOCKS.filter((b) => b.types.length || b.id === "boost").map(blockCard).join("") + routingCard();
   const mappedCount = BLOCKS.flatMap((b) => b.params).filter((p) => p.index != null).length;
