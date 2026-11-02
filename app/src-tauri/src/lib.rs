@@ -618,6 +618,90 @@ async fn midi_backup(
     .await
 }
 
+// ---- Factory bank (read-only) -------------------------------------------
+
+/// The unit's 100 factory presets (wire numbers 0..99), which its display
+/// shows as banks A0–A9 and B0–B9. Built into the app from TC's factory set.
+fn factory() -> &'static Bank {
+    static FACTORY: std::sync::OnceLock<Bank> = std::sync::OnceLock::new();
+    FACTORY.get_or_init(|| {
+        vyzor::load_bank(include_bytes!("../../../testdata/Factory_Set.SQS"))
+            .expect("built-in factory set decodes")
+    })
+}
+
+/// "A0-1" … "B9-5": how the unit labels factory preset `i` (0..99).
+fn factory_label(i: usize) -> String {
+    let bank = i / 5;
+    format!("{}{}-{}", if bank < 10 { 'A' } else { 'B' }, bank % 10, i % 5 + 1)
+}
+
+#[tauri::command]
+fn factory_bank() -> Vec<SlotView> {
+    (0..100)
+        .map(|i| SlotView {
+            index: i,
+            label: factory_label(i),
+            name: factory().get(i).map(|p| p.name()),
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn factory_view(index: usize) -> Result<PresetView, String> {
+    let p = factory().get(index).ok_or("no such factory preset")?;
+    let mut v = view::preset_view(index, p);
+    v.label = factory_label(index);
+    Ok(v)
+}
+
+/// Copy factory preset `from` into user slot `to` of the open bank, or into
+/// its first empty slot when `to` is None. Returns the slot used and the bank.
+#[tauri::command]
+fn factory_copy(
+    from: usize,
+    to: Option<usize>,
+    state: State<AppState>,
+) -> Result<(usize, BankView), String> {
+    let p = factory().get(from).cloned().ok_or("no such factory preset")?;
+    let slot = {
+        let mut bank = state.bank.lock().unwrap();
+        let slot = match to {
+            Some(t) if t < 200 => t,
+            Some(_) => return Err("user slots are 0..199".into()),
+            None => (0..200)
+                .find(|&i| bank.get(i).is_none())
+                .ok_or("The user bank is full")?,
+        };
+        bank.set(slot, p);
+        slot
+    };
+    state.dirty.lock().unwrap().insert(slot);
+    Ok((slot, get_bank(state)))
+}
+
+/// Load a factory preset into the unit's edit buffer (nothing is stored).
+#[tauri::command]
+async fn factory_audition(
+    index: usize,
+    input: String,
+    output: String,
+    app: AppHandle,
+) -> Result<String, String> {
+    blocking(move || {
+        let p = factory().get(index).ok_or("no such factory preset")?;
+        let msgs = gsystem_protocol::live::full_push(p);
+        let state = app.state::<AppState>();
+        let mut live = state.live.lock().unwrap();
+        match live.as_mut() {
+            Some(m) => send_all(m, &msgs)?,
+            None => send_all(&mut Midi::open(&input, &output)?, &msgs)?,
+        }
+        Ok(p.name())
+    })
+    .await
+}
+
 /// Stop a running bank read after the current slot.
 #[tauri::command]
 fn midi_cancel(state: State<AppState>) {
@@ -658,7 +742,11 @@ pub fn run() {
             midi_live,
             midi_backup,
             midi_send,
-            midi_cancel
+            midi_cancel,
+            factory_bank,
+            factory_view,
+            factory_copy,
+            factory_audition
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

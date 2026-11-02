@@ -31,7 +31,7 @@ type Edit =
   | { kind: "modifier"; slot: number; source: number; min: number; mid: number; max: number }
   | { kind: "nova"; value: number };
 type Ports = { inputs: string[]; outputs: string[] };
-type View = "connect" | "banks" | "preset" | "global";
+type View = "connect" | "banks" | "factory" | "preset" | "global";
 
 // ---------------------------------------------------------------- state
 const app = document.getElementById("app")!;
@@ -40,6 +40,10 @@ let bank: BankView = { path: null, occupied: 0, dirty: [], slots: [] };
 let selected: number | null = null;
 let detail: Detail | null = null;
 let half: 0 | 1 = 0; // banks 00–19 / 20–39
+// The unit's factory bank (A0–B9), built into the app and read-only.
+let factory: Slot[] = [];
+let fsel: number | null = null;
+let fdetail: Detail | null = null;
 let dragFrom: number | null = null;
 let ports: Ports = { inputs: [], outputs: [] };
 let portIn = "";
@@ -116,6 +120,10 @@ function esc(s: string) {
 }
 function go(v: View) {
   view = v;
+  if (v === "factory" && !factory.length) {
+    loadFactory().then(render, (e) => setStatus(String(e), true));
+    return;
+  }
   render();
 }
 
@@ -288,7 +296,7 @@ async function syncDirty() {
 
 // ---------------------------------------------------------------- shared chrome
 function header(): string {
-  const tabs = (["banks", "preset", "global"] as View[])
+  const tabs = (["banks", "factory", "preset", "global"] as View[])
     .map((v) => `<button class="${view === v ? "on" : ""}" data-view="${v}" ${v === "preset" && selected == null ? "disabled" : ""}>${v[0].toUpperCase() + v.slice(1)}</button>`)
     .join("");
   return `<header class="top">
@@ -404,6 +412,97 @@ function banksView(): string {
     ${inspector()}
   </main>`;
 }
+// ---------------------------------------------------------------- factory view
+function factoryView(): string {
+  const rows: string[] = [];
+  for (let b = 0; b < 20; b++) {
+    const cells = [0, 1, 2, 3, 4].map((p) => {
+      const i = b * 5 + p;
+      const s = factory[i];
+      return `<div class="cell fcell ${fsel === i ? "sel" : ""}" data-f="${i}" tabindex="0">
+        <span class="lbl">${s?.label ?? ""}</span>
+        <span class="nm ${s?.name == null ? "empty" : ""}">${s?.name != null ? esc(s.name) : "—"}</span>
+      </div>`;
+    }).join("");
+    rows.push(`<div class="grow"><div class="bankno">${b < 10 ? "A" : "B"}${b % 10}</div>${cells}</div>`);
+  }
+  return `<main class="body">
+    <section class="center">
+      <div class="toolbar">
+        <span><b>Factory bank</b> <span class="dim">· the 100 presets built into the G-System (A0–B9 on its display) · read-only</span></span>
+      </div>
+      <div class="gridwrap">
+        <div class="grow head"><div>Bank</div><div>Switch 1</div><div>Switch 2</div><div>Switch 3</div><div>Switch 4</div><div>Switch 5</div></div>
+        ${rows.join("")}
+      </div>
+      <div class="legend"><span>Click to look inside · Audition to hear it on the unit · copy one into your user bank to edit it</span><span class="status ${statusErr ? "err" : ""}">${esc(status)}</span></div>
+    </section>
+    ${factoryInspector()}
+  </main>`;
+}
+function factoryInspector(): string {
+  const s = fsel != null ? factory[fsel] : null;
+  if (!s || s.name == null || !fdetail) {
+    return `<aside class="inspector"><div class="eyebrow">Factory preset</div><div class="note">Select a preset to see its signal chain. Factory presets can't be changed; copy one into your user bank to edit it.</div></aside>`;
+  }
+  const mini = fdetail.chain.filter((c) => ["filter", "comp", "mod", "pitch", "delay", "reverb", "eq", "gate", "boost"].includes(c.key))
+    .map((c) => `<div class="${c.on ? "on" : ""}"><div class="k">${esc(c.name)}</div><div class="v">${esc(c.summary)}</div></div>`)
+    .join("");
+  const target = selected != null ? bank.slots[selected] : null;
+  return `<aside class="inspector">
+    <div>
+      <div class="eyebrow mono" style="margin-bottom:6px">${s.label} · FACTORY</div>
+      <div class="pname" style="display:flex;align-items:center">${esc(s.name)}</div>
+      <div class="dim" style="font-size:11px;margin-top:6px">${esc(fdetail.routings[fdetail.routing] ?? "")}${fdetail.bpm != null ? ` · ${fdetail.bpm} BPM` : ""}</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div class="eyebrow">Signal chain</div>
+      <div class="chain-mini">${mini}</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button class="btn primary" id="faudition" style="height:38px;border-radius:8px" ${unit.connected ? "" : "disabled"} title="${unit.connected ? "Load into the unit's edit buffer to hear it. Nothing is stored." : "Connect the G-System to audition"}">Audition on unit</button>
+      <button class="btn" id="fcopy">Copy to first empty user slot</button>
+      ${target ? `<button class="btn" id="fcopysel">${target.name != null ? `Replace ${target.label} (${esc(target.name)})` : `Copy to ${target.label}`}</button>` : ""}
+    </div>
+    <div class="note" style="margin-top:auto"><b>Factory vs. user</b>These are the presets in the unit's A and B banks. A copy goes into your user bank here; to keep it on the unit, audition it and press STORE on the G-System.</div>
+  </aside>`;
+}
+async function loadFactory() {
+  if (!factory.length) factory = await invoke<Slot[]>("factory_bank");
+}
+async function selectFactory(i: number) {
+  fsel = i;
+  try {
+    fdetail = await invoke<Detail>("factory_view", { index: i });
+  } catch (e) {
+    fdetail = null;
+    setStatus(String(e), true);
+  }
+  render();
+  if (live) await factoryAudition(i);
+}
+async function factoryAudition(i: number) {
+  try {
+    const name = await invoke<string>("factory_audition", { index: i, input: portIn, output: portOut });
+    setStatus(`Loaded factory “${name}” into the unit. ${STORE_HINT}`);
+  } catch (e) {
+    setStatus(String(e), true);
+  }
+}
+async function factoryCopy(to: number | null) {
+  if (fsel == null) return;
+  try {
+    const [slot, v] = await invoke<[number, BankView]>("factory_copy", { from: fsel, to });
+    selected = slot;
+    half = slot < 100 ? 0 : 1;
+    await refresh(v);
+    setStatus(`Copied “${factory[fsel].name}” to ${bank.slots[slot].label}. Save a .syx to keep it, or audition it and press STORE on the unit.`);
+    go("banks");
+  } catch (e) {
+    setStatus(String(e), true);
+  }
+}
+
 function inspector(): string {
   const s = selected != null ? bank.slots[selected] : null;
   if (!s || s.name == null || !detail) {
@@ -710,7 +809,7 @@ function render() {
   // Keep keyboard focus on the same control across re-renders.
   const a = document.activeElement as HTMLElement | null;
   const key = a?.dataset.field != null ? `${a.tagName.toLowerCase()}[data-field="${a.dataset.field}"]` : a?.dataset.pt ? `[data-pt="${a.dataset.pt}"]` : null;
-  app.innerHTML = header() + (view === "connect" ? connectView() : strip() + (view === "banks" ? banksView() : view === "preset" ? presetView() : globalView()));
+  app.innerHTML = header() + (view === "connect" ? connectView() : strip() + (view === "banks" ? banksView() : view === "factory" ? factoryView() : view === "preset" ? presetView() : globalView()));
   wire();
   if (key) document.querySelector<HTMLElement>(key)?.focus();
 }
@@ -754,7 +853,17 @@ function wire() {
   }
 
   // grid cells
-  document.querySelectorAll<HTMLElement>(".cell").forEach((el) => {
+  // factory cells
+  document.querySelectorAll<HTMLElement>(".cell[data-f]").forEach((el) => {
+    const i = Number(el.dataset.f);
+    el.onclick = () => selectFactory(i);
+    el.onkeydown = (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); selectFactory(i); } };
+  });
+  on("faudition", () => fsel != null && factoryAudition(fsel));
+  on("fcopy", () => factoryCopy(null));
+  on("fcopysel", () => factoryCopy(selected));
+
+  document.querySelectorAll<HTMLElement>(".cell[data-i]").forEach((el) => {
     const i = Number(el.dataset.i);
     el.onclick = async () => {
       selected = i;
