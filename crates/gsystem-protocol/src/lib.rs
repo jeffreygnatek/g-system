@@ -7,6 +7,8 @@
 //! The crate has no I/O dependencies: it turns bytes into structs and back.
 //! Transport (MIDI, HID) lives in other crates.
 
+#[cfg(feature = "serde")]
+pub mod author;
 pub mod bank;
 pub mod empty;
 pub mod globals;

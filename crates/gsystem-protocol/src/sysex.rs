@@ -114,7 +114,7 @@ pub fn to_nibbles(bytes: &[u8]) -> Vec<u8> {
 
 /// Collapse (hi, lo) nibble pairs into bytes. Errors on any byte >= 0x10.
 pub fn from_nibbles(nibbles: &[u8]) -> Result<Vec<u8>, SysexError> {
-    if nibbles.len() % 2 != 0 {
+    if !nibbles.len().is_multiple_of(2) {
         return Err(SysexError::BadLength {
             expected: nibbles.len() + 1,
             found: nibbles.len(),
@@ -227,12 +227,14 @@ impl Message {
                 device,
                 number: u14(p[1], p[2]),
             },
-            msg::SET_PARAM if p.len() >= 9 && (p.len() - 3) % 6 == 0 => Message::SetParam {
-                device,
-                block: p[0],
-                param: u14(p[1], p[2]),
-                values: p[3..].chunks_exact(6).map(nibbles_i24).collect(),
-            },
+            msg::SET_PARAM if p.len() >= 9 && (p.len() - 3).is_multiple_of(6) => {
+                Message::SetParam {
+                    device,
+                    block: p[0],
+                    param: u14(p[1], p[2]),
+                    values: p[3..].chunks_exact(6).map(nibbles_i24).collect(),
+                }
+            }
             msg::REQUEST_PARAMS if p.len() == 5 => Message::RequestParams {
                 device,
                 block: p[0],

@@ -52,7 +52,19 @@ fn matches(port: &str, want: &str) -> bool {
 
 impl Session {
     pub fn open(in_name: &str, out_name: &str) -> Session {
-        let mut inp = MidiInput::new(CLIENT).unwrap_or_else(|e| midi_unavailable(e));
+        Session::try_open(in_name, out_name).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1)
+        })
+    }
+
+    /// Like [`open`](Self::open), but returns errors instead of exiting
+    /// (for long-running callers such as `gsys mcp`).
+    pub fn try_open(in_name: &str, out_name: &str) -> Result<Session, String> {
+        let unavailable = |e: &dyn std::fmt::Display| {
+            format!("MIDI is not available on this system ({e}). On Linux make sure ALSA's sequencer is loaded (`modprobe snd-seq`).")
+        };
+        let mut inp = MidiInput::new(CLIENT).map_err(|e| unavailable(&e))?;
         inp.ignore(midir::Ignore::None);
         let in_port = inp
             .ports()
@@ -62,11 +74,8 @@ impl Session {
                     .map(|n| matches(&n, in_name))
                     .unwrap_or(false)
             })
-            .unwrap_or_else(|| {
-                eprintln!("no MIDI input port matching {in_name:?} (try `gsys ports`)");
-                std::process::exit(1)
-            });
-        let out = MidiOutput::new(CLIENT).unwrap_or_else(|e| midi_unavailable(e));
+            .ok_or_else(|| format!("no MIDI input port matching {in_name:?} (try `gsys ports`)"))?;
+        let out = MidiOutput::new(CLIENT).map_err(|e| unavailable(&e))?;
         let out_port = out
             .ports()
             .into_iter()
@@ -75,10 +84,9 @@ impl Session {
                     .map(|n| matches(&n, out_name))
                     .unwrap_or(false)
             })
-            .unwrap_or_else(|| {
-                eprintln!("no MIDI output port matching {out_name:?} (try `gsys ports`)");
-                std::process::exit(1)
-            });
+            .ok_or_else(|| {
+                format!("no MIDI output port matching {out_name:?} (try `gsys ports`)")
+            })?;
         let (tx, rx) = mpsc::channel();
         // Reassemble F0..F7: some backends split long SysEx across callbacks.
         let mut buf: Vec<u8> = Vec::new();
@@ -101,9 +109,11 @@ impl Session {
                 },
                 (),
             )
-            .expect("connect input");
-        let out = out.connect(&out_port, CLIENT).expect("connect output");
-        Session { _in: conn, rx, out }
+            .map_err(|e| format!("cannot open MIDI input {in_name:?}: {e}"))?;
+        let out = out
+            .connect(&out_port, CLIENT)
+            .map_err(|e| format!("cannot open MIDI output {out_name:?}: {e}"))?;
+        Ok(Session { _in: conn, rx, out })
     }
 
     fn send(&mut self, bytes: &[u8]) {
@@ -157,12 +167,20 @@ impl Session {
 
     /// Send messages with the unit's pacing (edit-buffer writes).
     pub fn send_all(&mut self, msgs: &[Message]) {
+        self.try_send_all(msgs).expect("send");
+    }
+
+    /// [`send_all`](Self::send_all), returning send errors instead of panicking.
+    pub fn try_send_all(&mut self, msgs: &[Message]) -> Result<(), String> {
         for m in msgs {
-            self.send(&m.encode());
+            self.out
+                .send(&m.encode())
+                .map_err(|e| format!("MIDI send failed: {e}"))?;
             std::thread::sleep(Duration::from_millis(
                 gsystem_protocol::live::SEND_INTERVAL_MS,
             ));
         }
+        Ok(())
     }
 
     /// Read the unit's global settings and footswitch assignments with

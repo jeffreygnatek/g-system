@@ -12,4 +12,4 @@ path = "src/main.rs"
 [dependencies]
 gsystem-protocol = { path = "../crates/gsystem-protocol", features = ["serde"] }
 midir = "0.10"
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }

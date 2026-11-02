@@ -4,6 +4,7 @@
 //! USB port (it appears as a MIDI device) or a USB-MIDI interface on the
 //! 5-pin jacks.
 
+mod mcp;
 mod midi;
 
 use gsystem_protocol::preset::slot_label;
@@ -34,6 +35,11 @@ MIDI commands (<port> matches by name, e.g. \"G-System\"; in and out may differ)
   gsys audition <port> <file> <slot>        load a preset into the unit's edit buffer to hear it.
                                             Nothing is stored; press STORE on the unit to keep it.
   gsys raw <port> <hex bytes>               send an arbitrary SysEx
+
+AI agents (Model Context Protocol server on stdin/stdout):
+  gsys mcp --bank <file.syx> [--port <port>] [--read-only]
+                                            design and edit presets in a working bank;
+                                            audition loads the edit buffer, never stores
 
 Writing to the unit (read PROTOCOL.md \"Storing presets\" first):
   gsys store <port> <file.syx> <file-slot> <unit-slot> --sysex-id <n> --i-accept-the-risk
@@ -191,6 +197,16 @@ fn main() {
             std::fs::write(a(4), syx::save_bank(&bank, 0)).expect("write");
             println!("renamed slot {slot} → {:?}", a(3));
         }
+        "mcp" => match mcp::parse_args(&args[1..]) {
+            Ok(opts) => mcp::run(opts),
+            Err(e) => {
+                if !e.is_empty() {
+                    eprintln!("{e}\n");
+                }
+                eprintln!("{}", mcp::usage());
+                std::process::exit(2)
+            }
+        },
         "ports" => midi::list_ports(),
         "monitor" => midi::monitor(a(1)),
         "identify" => {
@@ -333,7 +349,7 @@ fn print_preset(slot: usize, p: &gsystem_protocol::Preset) {
         .map(|i| format!("{}", i + 1))
         .collect();
     println!(
-        "  routing {} · loops {} · insert {} · boost {}{}",
+        "  routing {} · loops {} · insert {} · boost {} ({} dB)",
         levels::ROUTINGS[l.routing],
         if loops.is_empty() {
             "off".into()
@@ -342,7 +358,7 @@ fn print_preset(slot: usize, p: &gsystem_protocol::Preset) {
         },
         if l.insert { "on" } else { "off" },
         if l.boost { "on" } else { "off" },
-        format!(" ({} dB)", l.boost_level),
+        l.boost_level,
     );
     if let Some(ms) = tempo::preset_tempo_ms(p) {
         println!("  tempo {} BPM ({ms} ms)", tempo::ms_to_bpm(ms));

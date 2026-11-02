@@ -135,11 +135,62 @@ gsys backup  <port> <out.syx> [from] [to]
 gsys audition <port> <file> <slot>   load into the unit's edit buffer (press STORE on the unit to keep)
 gsys raw     <port> "F0 7E 7F 06 01 F7"
 gsys store   <port> <file.syx> <file-slot> <unit-slot> --sysex-id <n> --i-accept-the-risk
+gsys mcp --bank <file.syx> [--port <port>] [--read-only]   MCP server for AI agents (below)
 ```
 
 Port names match by substring (`gsys ports` lists them; usually "G-System").
 Slots are 0-based user slots: 0 = 00-1 … 199 = 39-5. `store` can freeze the
 unit, so back up with `backup` first.
+
+## Design presets with an AI agent (MCP)
+
+`gsys mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server, so an agent such as Claude Desktop or Claude Code can design and edit
+presets from a musical brief ("Gilmour lead: comp, delay ~440 ms, hall"). It
+works on a **working bank file**, and the agent gets a catalog of every block,
+effect type and parameter, so it writes values like `"350 ms"`, `"2.5 kHz"`
+or `"1/8D"` instead of guessing raw numbers.
+
+Tools: `get_catalog`, `list_presets`, `get_preset`, `create_preset`,
+`update_preset`, `copy_preset`, `rename_preset`, `clear_slot`,
+`validate_preset`, `find_empty_slot`, and `audition` when a MIDI port is
+given. There is also a `design_preset` prompt with guidance for the agent.
+
+**Safety model.** The agent never stores anything on the unit. Changes go to
+the bank file (written atomically after each change; the first change of a
+session keeps the previous file as `<bank>.bak`). `audition` loads a preset
+into the G-System's **edit buffer** only, like turning knobs; to keep the
+sound, press **STORE** on the unit. There is no store tool, because the
+editor store sequence has frozen units (see `PROTOCOL.md`).
+
+- `--bank <file>`: a `.syx` (created empty if missing). A `.SQS`, `.Prs` or
+  `.Ebf` is loaded and changes are saved to `<same name>.syx`.
+- `--port <name>`: the unit's MIDI port (as in `gsys ports`); enables `audition`.
+- `--read-only`: hide the tools that change the bank.
+
+Install `gsys` with `cargo install --path cli` (or use a release archive).
+For Claude Code:
+
+```sh
+claude mcp add gsystem -- gsys mcp --bank ~/G-System/agent.syx --port "G-System"
+```
+
+For Claude Desktop, add to `claude_desktop_config.json` (absolute paths; `~`
+is not expanded there):
+
+```json
+{
+  "mcpServers": {
+    "gsys": {
+      "command": "/Users/you/.cargo/bin/gsys",
+      "args": ["mcp", "--bank", "/Users/you/G-System/agent.syx", "--port", "G-System"]
+    }
+  }
+}
+```
+
+During development, run it from the repo with
+`cargo run -q -p gsys -- mcp --bank /tmp/agent.syx`.
 
 ## First session with the unit
 
