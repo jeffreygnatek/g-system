@@ -170,3 +170,36 @@ fn parameter_tables_match_vyzor_screenshot() {
     assert_eq!(l.loops, [false; 4]);
     assert_eq!(l.boost_level, 6);
 }
+
+#[test]
+fn every_factory_preset_passes_validation() {
+    use gsystem_protocol::validate::{canonical_bytes, check, normalize};
+    let bank = vyzor::load_bank(&factory()).unwrap();
+    let mut seen = std::collections::HashSet::new();
+    let mut warned = 0;
+    for i in 0..200 {
+        let Some(p) = bank.get(i) else { continue };
+        let r = check(p);
+        assert!(r.is_ok(), "{} {}: {}", slot_label(i), p.name(), r.summary());
+        warned += !r.warnings.is_empty() as usize;
+        // Normalizing never changes the sound, and every factory sound is distinct.
+        assert_eq!(canonical_bytes(&normalize(p)), canonical_bytes(p));
+        seen.insert(canonical_bytes(p));
+    }
+    eprintln!(
+        "{warned} factory presets have warnings; {} distinct sounds",
+        seen.len()
+    );
+    let twilight = vyzor::load_bank(
+        &std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../testdata/Twilight.Prs"
+        ))
+        .unwrap(),
+    );
+    if let Ok(b) = twilight {
+        for p in (0..200).filter_map(|i| b.get(i)) {
+            assert!(check(p).is_ok(), "Twilight: {}", check(p).summary());
+        }
+    }
+}

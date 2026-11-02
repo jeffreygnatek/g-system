@@ -20,6 +20,7 @@ pub mod switches;
 pub mod sysex;
 pub mod syx;
 pub mod tempo;
+pub mod validate;
 #[cfg(feature = "serde")]
 pub mod view;
 pub mod vyzor;
