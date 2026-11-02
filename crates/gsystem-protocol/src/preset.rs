@@ -45,9 +45,11 @@ impl Preset {
     pub fn name(&self) -> String {
         let field = &self.raw[..NAME_LEN];
         let end = field.iter().position(|&b| b == 0).unwrap_or(NAME_LEN);
+        // The unit sets bit 7 on some name bytes as a flag (kept in `raw`);
+        // the character is the low 7 bits.
         field[..end]
             .iter()
-            .map(|&b| b as char)
+            .map(|&b| (b & 0x7F) as char)
             .collect::<String>()
             .trim_end()
             .to_string()

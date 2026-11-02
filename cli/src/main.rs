@@ -21,6 +21,8 @@ File commands (offline):
   gsys json <file.SQS|file.syx>             dump presets as JSON (raw fields + decoded view)
   gsys scripts <file.Prs|.Ebf|.SQS>         show SysEx the editor's TRAN/RECV scripts send/expect
   gsys rename <in.syx> <slot> \"<name>\" <out.syx>
+  gsys merge <out.syx> <file>…              combine banks into one, in order, skipping
+                                            duplicate sounds (same parameters, any name)
 
 MIDI commands (<port> matches by name, e.g. \"G-System\"; in and out may differ):
   gsys ports                                list MIDI in/out ports
@@ -82,6 +84,44 @@ fn main() {
             let bank = load_any(Path::new(a(1)));
             std::fs::write(a(2), syx::save_bank(&bank, 0)).expect("write");
             println!("wrote {} presets to {}", bank.occupied(), a(2));
+        }
+        "merge" => {
+            if args.len() < 3 {
+                usage();
+            }
+            let mut out = Bank::empty();
+            let mut seen = std::collections::HashSet::new();
+            let (mut next, mut dupes, mut full) = (0usize, 0usize, 0usize);
+            for path in &args[2..] {
+                let bank = load_any(Path::new(path));
+                let mut added = 0;
+                for p in bank.slots.iter().flatten() {
+                    let key = gsystem_protocol::validate::canonical_bytes(p);
+                    if !seen.insert(key) {
+                        dupes += 1;
+                        continue;
+                    }
+                    if next >= 200 {
+                        full += 1;
+                        continue;
+                    }
+                    out.set(next, gsystem_protocol::validate::normalize(p));
+                    next += 1;
+                    added += 1;
+                }
+                println!("{added:>3} from {path}");
+            }
+            std::fs::write(a(1), syx::save_bank(&out, 0)).expect("write");
+            println!(
+                "wrote {} presets to {} ({dupes} duplicates skipped{})",
+                out.occupied(),
+                a(1),
+                if full > 0 {
+                    format!(", {full} left out: bank full")
+                } else {
+                    String::new()
+                }
+            );
         }
         "show" => {
             let bank = load_any(Path::new(a(1)));
