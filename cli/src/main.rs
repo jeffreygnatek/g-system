@@ -333,7 +333,7 @@ fn print_preset(slot: usize, p: &gsystem_protocol::Preset) {
         .map(|i| format!("{}", i + 1))
         .collect();
     println!(
-        "  routing {} · loops {} · insert {} · boost {}{}",
+        "  routing {} · loops {} · insert {} · boost {} ({} dB)",
         levels::ROUTINGS[l.routing],
         if loops.is_empty() {
             "off".into()
@@ -342,7 +342,7 @@ fn print_preset(slot: usize, p: &gsystem_protocol::Preset) {
         },
         if l.insert { "on" } else { "off" },
         if l.boost { "on" } else { "off" },
-        format!(" ({} dB)", l.boost_level),
+        l.boost_level,
     );
     if let Some(ms) = tempo::preset_tempo_ms(p) {
         println!("  tempo {} BPM ({ms} ms)", tempo::ms_to_bpm(ms));

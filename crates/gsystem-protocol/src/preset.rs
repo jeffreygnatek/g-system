@@ -1,9 +1,9 @@
 //! A decoded G-System preset: the 516-byte payload of a `0x20` dump.
 //!
 //! Layout (confirmed from 100 factory presets):
-//! - bytes 0..20   name (20 chars max, NUL-terminated; leftover bytes after
-//!                 the NUL are not cleared by the editor), byte 20 is always 0
-//! - bytes 21..516 165 fields, each a little-endian signed 24-bit integer.
+//! - bytes 0..20: name (20 chars max, NUL-terminated; leftover bytes after
+//!   the NUL are not cleared by the editor), byte 20 is always 0
+//! - bytes 21..516: 165 fields, each a little-endian signed 24-bit integer.
 //!   See [`crate::params`] for the block layout and [`crate::levels`] for
 //!   the packed loops/boost/routing field.
 

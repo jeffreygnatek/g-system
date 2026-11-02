@@ -780,6 +780,46 @@ pub fn diff_fields(a: &Preset, b: &Preset) -> Vec<(usize, i32, i32)> {
         .collect()
 }
 
+/// JSON-ish dump of the tables, for cross-checking against the original
+/// TypeScript (see tools/xcheck). Not part of the public API.
+#[doc(hidden)]
+pub fn dump_tables() -> String {
+    fn esc(s: &str) -> String {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+    fn param(p: &Param) -> String {
+        let ch: Vec<String> = p.choices.iter().map(|c| esc(c)).collect();
+        format!(
+            "[{},{},{},[{}],{}]",
+            esc(p.name),
+            p.lo,
+            p.hi,
+            ch.join(","),
+            p.choices_base
+        )
+    }
+    let blocks: Vec<String> = BLOCKS
+        .iter()
+        .map(|b| {
+            let types: Vec<String> = b
+                .types
+                .iter()
+                .map(|t| format!("[{},[{}]]", esc(t.name), t.params.iter().map(param).collect::<Vec<_>>().join(",")))
+                .collect();
+            format!(
+                "{{\"key\":{},\"count\":{},\"size\":{},\"enable\":{},\"types\":[{}],\"params\":[{}]}}",
+                esc(b.key),
+                b.count_field,
+                b.size,
+                esc(b.enable_name),
+                types.join(","),
+                b.params.iter().map(param).collect::<Vec<_>>().join(",")
+            )
+        })
+        .collect();
+    format!("[{}]", blocks.join(","))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,44 +914,4 @@ mod tests {
             .0;
         assert_eq!(d.param_i24(fmax), 34);
     }
-}
-
-/// JSON-ish dump of the tables, for cross-checking against the original
-/// TypeScript (see tools/xcheck). Not part of the public API.
-#[doc(hidden)]
-pub fn dump_tables() -> String {
-    fn esc(s: &str) -> String {
-        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-    }
-    fn param(p: &Param) -> String {
-        let ch: Vec<String> = p.choices.iter().map(|c| esc(c)).collect();
-        format!(
-            "[{},{},{},[{}],{}]",
-            esc(p.name),
-            p.lo,
-            p.hi,
-            ch.join(","),
-            p.choices_base
-        )
-    }
-    let blocks: Vec<String> = BLOCKS
-        .iter()
-        .map(|b| {
-            let types: Vec<String> = b
-                .types
-                .iter()
-                .map(|t| format!("[{},[{}]]", esc(t.name), t.params.iter().map(param).collect::<Vec<_>>().join(",")))
-                .collect();
-            format!(
-                "{{\"key\":{},\"count\":{},\"size\":{},\"enable\":{},\"types\":[{}],\"params\":[{}]}}",
-                esc(b.key),
-                b.count_field,
-                b.size,
-                esc(b.enable_name),
-                types.join(","),
-                b.params.iter().map(param).collect::<Vec<_>>().join(",")
-            )
-        })
-        .collect();
-    format!("[{}]", blocks.join(","))
 }
