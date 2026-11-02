@@ -86,6 +86,15 @@ tables, and they agree. It also caught a one-step error in the original EQ
 width display, which is fixed in the port. `tools/xcheck` diffs the port
 against the original TypeScript: 0 differences.
 
+## Edit buffer (Live mode) [DA]
+
+`55 22 <block> <param:2> <value:6 nibbles>` sent to device `7F` changes the
+unit's edit buffer, exactly like turning a knob. Block ids: EQ 2, Mod 4,
+Filter 7, Pitch 8, Delay 9, Comp 10, Reverb 11, Gate 12; levels 1 (routing 0,
+boost 10, boost level 11, relay 16, relays A/B 17/18, loops 19–22, insert 23,
+outputs 26/27); modifiers 13 (param 20 + slot); NovaDrive 14. A block's param
+n is preset field `first_field + n`, type first. See `live.rs`.
+
 ## Storing presets — read this first
 
 DA captured Vyzor's Sync and found that a store is:
@@ -100,7 +109,9 @@ all addressed to the unit's own SysEx ID, with about 100 ms between messages.
 **That exact sequence has frozen a unit intermittently.** The freeze needs a power cycle,
 leaves the slot unreadable, and has once altered a neighbouring preset **[DA]**. So:
 
-- the desktop app **does not write to the unit**; edits stay in the file (save a `.syx`);
+- the desktop app **does not store presets directly**. It writes only to the
+  edit buffer (Audition / Live, `live.rs`); the user stores with the unit's own
+  STORE button;
 - `gsys store` implements the sequence for people who accept the risk.
   It requires `--sysex-id` and `--i-accept-the-risk`, and it reads the slot back to verify.
 

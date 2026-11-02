@@ -155,6 +155,16 @@ impl Session {
         }
     }
 
+    /// Send messages with the unit's pacing (edit-buffer writes).
+    pub fn send_all(&mut self, msgs: &[Message]) {
+        for m in msgs {
+            self.send(&m.encode());
+            std::thread::sleep(Duration::from_millis(
+                gsystem_protocol::live::SEND_INTERVAL_MS,
+            ));
+        }
+    }
+
     /// Read the unit's global settings and footswitch assignments with
     /// `55 47` requests (read-only; this is how Vyzor reads them).
     pub fn read_globals(&mut self) -> std::collections::HashMap<(u8, u16), i32> {

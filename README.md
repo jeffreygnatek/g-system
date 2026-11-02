@@ -11,14 +11,19 @@ runs on current operating systems.
 > separately; its parameter tables, levels and tempo code are now ported to Rust
 > from that project (credited in each file and in `PROTOCOL.md`).
 
-Status: **reading works; writing to the unit is disabled.** Banks and presets
+Status: **reading works; presets reach the unit through its own Store button.** Banks and presets
 load from `.SQS`/`.syx` files and from the unit over MIDI. The unit's own USB
 port shows up as a MIDI device, so no interface is needed. Every effect block,
 type and parameter is decoded and editable, along with routing, loops, insert,
 boost, tempo, modifier (pedal/encoder) assignments and the NovaDrive preset.
-Global settings and footswitch assignments are read from the unit. Storing presets is turned off in the app because the
-store sequence the original editor uses can freeze the G-System; see
-`PROTOCOL.md` → "Storing presets".
+Global settings and footswitch assignments are read from the unit.
+
+To hear a preset, *Audition* loads it into the unit's edit buffer, and *Live*
+mode sends every edit there as you make it. To keep it, press **STORE** on the
+G-System, which uses the firmware's own store. Direct preset store (Vyzor's
+Sync) stays off in the app because it has frozen a unit; see
+[`docs/writing-to-the-unit.md`](docs/writing-to-the-unit.md) for what's known
+and the steps to try next.
 
 ```
 crates/gsystem-protocol   SysEx codec, preset/bank model, .SQS/.Prs/.syx parsers (no I/O deps)
@@ -99,6 +104,7 @@ gsys globals <port>              global settings and footswitch assignments (rea
 gsys monitor <port>
 gsys request <port> <slot>
 gsys backup  <port> <out.syx> [from] [to]
+gsys audition <port> <file> <slot>   load into the unit's edit buffer (press STORE on the unit to keep)
 gsys raw     <port> "F0 7E 7F 06 01 F7"
 gsys store   <port> <file.syx> <file-slot> <unit-slot> --sysex-id <n> --i-accept-the-risk
 ```
@@ -113,6 +119,10 @@ unit, so back up with `backup` first.
 2. `gsys ports`, then `gsys identify G-System`.
 3. `gsys backup G-System my-unit.syx` reads all 200 user slots (about 2½ minutes; empty slots are skipped).
 4. Open `my-unit.syx` in the app, or use the app's Connect screen to do the same thing.
+5. Try `gsys audition G-System my-unit.syx 0`, or the app's *Audition* / *Live*, and
+   keep sounds with the unit's STORE button.
+6. When you're ready to test direct store, follow
+   [`docs/writing-to-the-unit.md`](docs/writing-to-the-unit.md) step 2.
 
 ## License
 

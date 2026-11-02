@@ -44,6 +44,27 @@ let unit: { connected: boolean; progress?: string; version?: string } = { connec
 let focusBlock: string | null = null;
 let globals: GlobalsView | null = null;
 let globalsBusy = false;
+let live = false;
+const STORE_HINT = "Nothing is stored yet: press STORE on the G-System to keep it.";
+
+async function audition(index: number) {
+  try {
+    const name = await invoke<string>("midi_audition", { index, input: portIn, output: portOut });
+    setStatus(`Loaded “${name}” into the unit. ${STORE_HINT}`);
+  } catch (e) {
+    setStatus(String(e), true);
+  }
+}
+async function setLive(on: boolean) {
+  try {
+    live = await invoke<boolean>("midi_live", { on, index: selected, input: portIn, output: portOut });
+    setStatus(live ? `Live: edits go straight to the unit. ${STORE_HINT}` : "Live off: edits change the file only.");
+  } catch (e) {
+    live = false;
+    setStatus(String(e), true);
+  }
+  render();
+}
 let status = "";
 let statusErr = false;
 
@@ -265,7 +286,7 @@ function inspector(): string {
       <button class="btn primary" id="edit" style="height:38px;border-radius:8px">Edit preset</button>
       <div class="actions2">
         <button class="btn" id="readone" ${unit.connected ? "" : "disabled"}>Re-read from unit</button>
-        <button class="btn" id="syncone" disabled title="${WRITE_DISABLED}">Sync this slot</button>
+        <button class="btn" id="audition" ${unit.connected ? "" : "disabled"} title="Load into the unit's edit buffer to hear it. Nothing is stored.">Audition on unit</button>
         <button class="btn" id="copyto">Copy to…</button>
         <button class="btn" id="clear" style="color:var(--text-2)">Clear slot</button>
       </div>
@@ -339,7 +360,14 @@ function presetView(): string {
     `<button class="tile ${c.on ? "on" : ""} ${focusBlock === c.key ? "focus" : ""}" data-block="${c.key}"><span class="t">${esc(c.name)}<i></i></span><span class="s">${esc(c.summary)}</span></button>`).join("");
   return `
     <section class="chain" aria-label="Signal chain">${tiles}</section>
-    <div class="banner">Edits change this file only; sending them to the unit is disabled for now. Save a .syx to keep them.</div>
+    ${unit.connected
+      ? `<div class="livebar ${live ? "on" : ""}">
+          <button class="toggle ${live ? "on" : ""}" id="live" aria-label="Live mode ${live ? "on" : "off"}"></button>
+          <div><b>Live</b> ${live ? "— every change is sent to the unit's edit buffer as you make it." : "— off: edits change the file only."}
+          <span class="dim">To keep a sound on the unit, press <b>STORE</b> on the G-System and pick a slot there.</span></div>
+          <span class="status ${statusErr ? "err" : ""}">${esc(status)}</span>
+        </div>`
+      : `<div class="banner">Edits change this file. Connect a G-System to hear them live, then press STORE on the unit to keep them.</div>`}
     <main class="cards">${d.blocks.map(blockCard).join("")}${routingCard(d)}</main>`;
 }
 
@@ -408,7 +436,8 @@ function wire() {
   on("syncdirty", syncDirty);
   on("edit", () => go("preset"));
   on("readone", () => selected != null && midiBackup(selected, selected));
-  on("syncone", () => selected != null && midiSend(selected, selected));
+  on("audition", () => selected != null && audition(selected));
+  on("live", () => setLive(!live));
   on("clear", async () => { if (selected != null) await refresh(await invoke<BankView>("clear_slot", { index: selected })); });
   on("copyto", () => setStatus("Drag the preset to a slot while holding ⌥ to copy it"));
   on("toconnect", () => go("connect"));
@@ -434,7 +463,11 @@ function wire() {
   // grid cells
   document.querySelectorAll<HTMLElement>(".cell").forEach((el) => {
     const i = Number(el.dataset.i);
-    el.onclick = async () => { selected = i; await refresh(); };
+    el.onclick = async () => {
+      selected = i;
+      await refresh();
+      if (live && bank.slots[i]?.name != null) await audition(i);
+    };
     el.ondblclick = () => startRename(i, el);
     el.ondragstart = (ev) => { dragFrom = i; ev.dataTransfer?.setData("text/plain", String(i)); };
     el.ondragover = (ev) => { ev.preventDefault(); el.classList.add("drop"); };

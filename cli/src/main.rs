@@ -29,6 +29,8 @@ MIDI commands (<port> matches by name, e.g. \"G-System\"; in and out may differ)
   gsys monitor <port>                       print every G-System message received
   gsys request <port> <slot>                read one user preset and print it
   gsys backup <port> <out.syx> [from] [to]  read user slots from..to (default all) into a .syx
+  gsys audition <port> <file> <slot>        load a preset into the unit's edit buffer to hear it.
+                                            Nothing is stored; press STORE on the unit to keep it.
   gsys raw <port> <hex bytes>               send an arbitrary SysEx
 
 Writing to the unit (read PROTOCOL.md \"Storing presets\" first):
@@ -148,6 +150,22 @@ fn main() {
                     std::process::exit(1)
                 }
             }
+        }
+        "audition" => {
+            let bank = load_any(Path::new(a(2)));
+            let slot: usize = a(3).parse().unwrap_or_else(|_| usage());
+            let p = bank.get(slot).cloned().unwrap_or_else(|| {
+                eprintln!("slot {slot} is empty in {}", a(2));
+                std::process::exit(1)
+            });
+            let msgs = gsystem_protocol::live::full_push(&p);
+            let mut sess = midi::Session::open(a(1), a(1));
+            sess.send_all(&msgs);
+            println!(
+                "loaded {:?} into the G-System's edit buffer ({} messages). Nothing was stored: press STORE on the unit to keep it.",
+                p.name(),
+                msgs.len()
+            );
         }
         "globals" => {
             let mut sess = midi::Session::open(a(1), a(1));

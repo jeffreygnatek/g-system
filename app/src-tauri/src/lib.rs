@@ -16,6 +16,8 @@ struct AppState {
     path: Mutex<Option<String>>,
     /// Slots changed since the last open / sync, for the amber "unsynced" dot.
     dirty: Mutex<std::collections::BTreeSet<usize>>,
+    /// Open while Live mode is on: edits go straight to the unit's edit buffer.
+    live: Mutex<Option<Midi>>,
 }
 
 #[derive(Serialize)]
@@ -184,10 +186,15 @@ fn edit_preset(index: usize, edit: Edit, state: State<AppState>) -> Result<Prese
         .get_mut(index)
         .and_then(|s| s.as_mut())
         .ok_or("empty slot")?;
+    let before = p.clone();
     view::apply(p, edit)?;
     let v = view::preset_view(index, p);
+    let msgs = gsystem_protocol::live::changes(&before, p);
     drop(bank);
     state.dirty.lock().unwrap().insert(index);
+    if let Some(m) = state.live.lock().unwrap().as_mut() {
+        send_all(m, &msgs)?;
+    }
     Ok(v)
 }
 
@@ -277,6 +284,65 @@ impl Midi {
         }
         None
     }
+}
+
+fn send_all(m: &mut Midi, msgs: &[Message]) -> Result<(), String> {
+    for msg in msgs {
+        m.out.send(&msg.encode()).map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_millis(
+            gsystem_protocol::live::SEND_INTERVAL_MS,
+        ));
+    }
+    Ok(())
+}
+
+/// Load a preset into the unit's edit buffer so it can be heard. Nothing is
+/// stored; the user keeps it with the unit's own Store button.
+#[tauri::command]
+fn midi_audition(
+    index: usize,
+    input: String,
+    output: String,
+    state: State<AppState>,
+) -> Result<String, String> {
+    let p = state
+        .bank
+        .lock()
+        .unwrap()
+        .get(index)
+        .cloned()
+        .ok_or("empty slot")?;
+    let msgs = gsystem_protocol::live::full_push(&p);
+    let mut live = state.live.lock().unwrap();
+    match live.as_mut() {
+        Some(m) => send_all(m, &msgs)?,
+        None => send_all(&mut Midi::open(&input, &output)?, &msgs)?,
+    }
+    Ok(p.name())
+}
+
+/// Turn Live mode on (loading `index` into the edit buffer) or off.
+#[tauri::command]
+fn midi_live(
+    on: bool,
+    index: Option<usize>,
+    input: String,
+    output: String,
+    state: State<AppState>,
+) -> Result<bool, String> {
+    let mut live = state.live.lock().unwrap();
+    if !on {
+        *live = None;
+        return Ok(false);
+    }
+    let mut m = Midi::open(&input, &output)?;
+    if let Some(i) = index {
+        if let Some(p) = state.bank.lock().unwrap().get(i) {
+            send_all(&mut m, &gsystem_protocol::live::full_push(p))?;
+        }
+    }
+    *live = Some(m);
+    Ok(true)
 }
 
 /// Read the unit's global settings and footswitch assignments (55 47
@@ -402,6 +468,8 @@ pub fn run() {
             midi_ports,
             midi_identify,
             midi_globals,
+            midi_audition,
+            midi_live,
             midi_backup,
             midi_send
         ])
