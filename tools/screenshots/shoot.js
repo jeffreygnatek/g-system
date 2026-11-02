@@ -40,8 +40,13 @@ const server = http.createServer((req, res) => {
       invoke: async (cmd, args) => {
         switch (cmd) {
           case "get_bank": return bank;
-          case "preset_view":
-          case "edit_preset": return factory.find((x) => x.slot === args.index).view;
+          case "preset_view": return factory.find((x) => x.slot === args.index).view;
+          case "edit_preset": {
+            // Only routing is simulated, to show the signal flow redraw.
+            const v = factory.find((x) => x.slot === args.index).view;
+            if (args.edit.kind === "routing") v.routing = args.edit.value;
+            return v;
+          }
           case "midi_ports": return { inputs: ["G-System"], outputs: ["G-System"] };
           case "midi_identify": return "01 00 04 02";
           case "midi_backup": bank = loaded; return factory.map((p) => p.slot);
@@ -51,6 +56,7 @@ const server = http.createServer((req, res) => {
     };
   }, factory);
 
+  await page.emulateMedia({ colorScheme: "dark" });
   await page.goto(`http://localhost:${port}/`);
   await page.waitForTimeout(600);
   await page.screenshot({ path: path.join(OUT, "connect.png") });
@@ -62,23 +68,25 @@ const server = http.createServer((req, res) => {
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(OUT, "banks.png") });
 
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.setViewportSize({ width: 1360, height: 1500 });
   await page.click('[data-view="preset"]');
-  await page.click('[data-block="delay"]');
+  await page.click('g.node[data-block="delay"]');
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(OUT, "preset.png") });
-
-  // The three panel finishes (grey is the default).
-  for (const skin of ["black", "red"]) {
-    await page.click(`[data-skin="${skin}"]`);
+  for (const [i, name] of [[2, "semi"], [1, "parallel"], [0, null]]) {
+    await page.click(`[data-routing-set="${i}"]`);
     await page.waitForTimeout(300);
-    await page.screenshot({ path: path.join(OUT, `preset-${skin}.png`) });
+    if (name) await page.screenshot({ path: path.join(OUT, `preset-${name}.png`) });
   }
-  await page.click('[data-block="reverb"]');
-  await page.click('[data-skin="grey"]');
-  await page.click('[data-mode="all"]');
+  await page.emulateMedia({ colorScheme: "light" });
   await page.waitForTimeout(300);
-  await page.screenshot({ path: path.join(OUT, "preset-all.png") });
-  await page.click('[data-mode="block"]');
+  await page.screenshot({ path: path.join(OUT, "preset-light.png") });
+  await page.setViewportSize({ width: 1360, height: 860 });
+  await page.click('[data-view="banks"]');
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(OUT, "banks-light.png") });
+  await page.emulateMedia({ colorScheme: "dark" });
 
   await page.click('[data-view="global"]');
   await page.waitForTimeout(400);

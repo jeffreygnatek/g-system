@@ -35,31 +35,45 @@ tools/                    gsys_preset_decode.py — the Python prototype of the 
 
 ## Screenshots
 
-The editor is styled after the unit itself: a front panel with the red LED bank
-display, the green LCD, the five preset footswitches (click to select, ▲▼ to
-change bank) and the effect status LEDs. Panel lettering uses Michroma, close to
-TC's engraved type. Choose a grey, black or red brushed finish from the header.
+The header and front panel look like the unit: the red 7-segment bank display,
+the dot-matrix LCD, the five preset footswitches (click to select, ▲▼ to
+change bank) and the effect LEDs. Everything below is built around the
+signal path. Light and dark follow your OS; the header button switches them.
 
-**Banks** — the 200-slot user bank laid out like the footswitches, with an
+**Banks**: the 200-slot user bank laid out like the footswitches, with an
 inspector for the selected preset. Amber dots mark slots that differ from the unit.
 
 ![Banks view](docs/screenshots/banks.png)
 
-**Preset** — one module per effect block, with a lit ring when it's on, plus the
-loop, insert and boost switches. Pick a module to edit it on knobs: drag up or
-down, scroll, or use the arrow keys (hold Shift while dragging for fine
-control). Each block shows the parameters of its current effect type, with
-value lists, units and ranges from the firmware tables. *All blocks* shows every
-block at once. In Live mode, each turn of a knob goes to the unit's edit buffer.
+**Preset**: the signal flow as the unit actually wires it. The digital
+blocks before the amp come first, then the four analog loops, then the insert
+(usually your amp's preamp), then the digital blocks after it. The routing
+redraws the cables: *Serial* in a line, *Semi-parallel* with Delay and Reverb
+side by side, and *Parallel* with Mod, Pitch, Delay and Reverb all fed the same
+signal. Click a block to edit it; click a loop or the insert to switch it.
+
+The block editor groups parameters by what they do (time, repeats, tone &
+dynamics, output; EQ by band). Click or drag a slider, or use the arrow keys
+(Shift for bigger steps). A parameter on a pedal shows its range right on
+the slider. The **Pedal** panel draws the heel, middle and toe values as a
+curve you can drag. In Live mode, every change goes to the unit's edit buffer
+as you make it.
 
 ![Preset view](docs/screenshots/preset.png)
 
 <table>
 <tr>
-<td width="50%"><b>Black brushed</b><br><img src="docs/screenshots/preset-black.png" alt="Preset view, black finish"></td>
-<td width="50%"><b>Red brushed</b><br><img src="docs/screenshots/preset-red.png" alt="Preset view, red finish"></td>
+<td width="50%"><b>Semi-parallel</b><br><img src="docs/screenshots/preset-semi.png" alt="Signal flow, semi-parallel routing"></td>
+<td width="50%"><b>Parallel</b><br><img src="docs/screenshots/preset-parallel.png" alt="Signal flow, parallel routing"></td>
+</tr>
+<tr>
+<td width="50%"><b>Light</b><br><img src="docs/screenshots/preset-light.png" alt="Preset view, light mode"></td>
+<td width="50%"><b>Banks, light</b><br><img src="docs/screenshots/banks-light.png" alt="Banks view, light mode"></td>
 </tr>
 </table>
+
+Where Gate and EQ sit in the chain isn't shown in TC's block diagram; the
+editor draws Gate first and EQ last. Corrections welcome.
 
 <table>
 <tr>

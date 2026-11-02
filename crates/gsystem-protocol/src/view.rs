@@ -48,6 +48,12 @@ pub struct ModifierView {
     pub max: u8,
     /// e.g. "Exp · 0 → 100 %", or "None".
     pub display: String,
+    /// Preset field of the controlled parameter (None for NovaDrive).
+    pub field: Option<usize>,
+    /// The parameter's value at heel / middle / toe, formatted ("13 %", "1.28 kHz").
+    pub values: Option<[String; 3]>,
+    /// The parameter's value at 0 % and 100 % of the pedal range (the curve's axis).
+    pub scale: Option<[String; 2]>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -172,7 +178,18 @@ pub fn preset_view(index: usize, p: &Preset) -> PresetView {
             .into_iter()
             .map(|t| {
                 let m = t.modifier;
+                let at = |pct: u8| {
+                    t.param
+                        .as_ref()
+                        .map(|fp| fp.format(modifiers::value_at(fp, pct)))
+                };
                 ModifierView {
+                    field: t.param_field,
+                    values: t
+                        .param
+                        .as_ref()
+                        .map(|_| [at(m.min).unwrap(), at(m.mid).unwrap(), at(m.max).unwrap()]),
+                    scale: t.param.as_ref().map(|_| [at(0).unwrap(), at(100).unwrap()]),
                     slot: t.slot,
                     key: t.key,
                     label: params::label(&t.name),
