@@ -511,6 +511,8 @@ struct BackupProgress {
     done: usize,
     total: usize,
     found: usize,
+    /// The preset's name when this slot answered (empty slots don't).
+    name: Option<String>,
 }
 
 /// Read user slots `from..=to` from the unit into the open bank, emitting a
@@ -556,6 +558,7 @@ async fn midi_backup(
                     _ => None,
                 }
             });
+            let name = p.as_ref().map(|p| p.name());
             if let Some(p) = p {
                 state.bank.lock().unwrap().set(slot, p);
                 state.dirty.lock().unwrap().remove(&slot);
@@ -568,6 +571,7 @@ async fn midi_backup(
                     done: n + 1,
                     total,
                     found: got.len(),
+                    name,
                 },
             );
         }

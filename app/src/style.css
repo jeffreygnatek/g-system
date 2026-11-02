@@ -220,6 +220,24 @@ aside.inspector {
 .cell .dot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--edited); flex-shrink: 0; }
 .cell input { background: var(--field); border: 1px solid var(--accent); border-radius: 4px; padding: 2px 6px; width: 100%; font: inherit; }
 .legend { display: flex; gap: 16px; font-size: 11px; color: var(--muted-2); flex-wrap: wrap; align-items: center; }
+
+/* Reading the bank from the unit: slots fill in as they arrive. */
+.readbar {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px 12px;
+  padding: 10px 14px; border-radius: 8px; background: var(--panel); border: 1px solid var(--accent);
+}
+.readbar .rb-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.readbar .rb-text b { font-family: var(--display); font-weight: 600; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
+.readbar .rb-text span { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.readbar .bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.readbar .bar > div { height: 100%; background: var(--accent); transition: width .3s; }
+.spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: spin 1s linear infinite; }
+.cell.pending .nm { color: var(--muted-2); }
+.cell.reading { box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft); }
+.cell.reading .nm { color: var(--accent); }
+.cell.arrived { animation: arrive .8s ease-out; }
+@keyframes arrive { from { background: var(--accent-soft); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .cell.arrived, .spin { animation: none; } }
 .legend .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--edited); margin-right: 6px; vertical-align: middle; }
 
 .inspector input.pname {

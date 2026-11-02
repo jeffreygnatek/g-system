@@ -51,8 +51,10 @@ let globalsBusy = false;
 let live = false;
 let pedalSlot: number | null = null;
 // A bank read in progress (the unit answers about one preset per second).
-type Reading = { done: number; total: number; found: number };
+type Reading = { done: number; total: number; found: number; slot?: number; name?: string | null };
 let reading: Reading | null = null;
+let readFrom = 0; // first slot of the read in progress
+let pickedHalf = false; // the user chose a page during the read: don't flip it for them
 let identifying = false; // modifier shown in the pedal panel
 // Light / dark: follows the OS until the user picks one (remembered on this machine).
 type Mode = "auto" | "light" | "dark";
@@ -191,15 +193,46 @@ function progressBar(r: Reading): string {
 /** Update the progress line and bar in place (a full render would reset scrolling). */
 function showProgress() {
   if (!reading) return;
-  document.querySelectorAll<HTMLElement>("[data-progress]").forEach((el) => (el.textContent = progressText(reading!)));
-  document.querySelectorAll<HTMLElement>(".bar > div").forEach((el) => (el.style.width = `${(reading!.done / reading!.total) * 100}%`));
+  const r = reading;
+  document.querySelectorAll<HTMLElement>("[data-progress]").forEach((el) => (el.textContent = progressText(r)));
+  document.querySelectorAll<HTMLElement>(".bar > div").forEach((el) => (el.style.width = `${(r.done / r.total) * 100}%`));
+  document.querySelectorAll<HTMLElement>("[data-defined]").forEach((el) => (el.textContent = `${bank.occupied} of 200 defined`));
+  // Fill the slot that just answered, and move the "reading" marker on.
+  if (r.slot != null) {
+    const cell = document.querySelector<HTMLElement>(`.cell[data-i="${r.slot}"]`);
+    if (cell) {
+      cell.classList.remove("reading", "pending");
+      const nm = cell.querySelector<HTMLElement>(".nm")!;
+      if (r.name != null) {
+        nm.textContent = r.name;
+        nm.classList.remove("empty");
+        cell.classList.add("arrived");
+        cell.draggable = true;
+      } else {
+        nm.textContent = "—";
+      }
+    }
+    document.querySelector<HTMLElement>(`.cell[data-i="${r.slot + 1}"]`)?.classList.add("reading");
+  }
 }
 async function midiBackup(from: number, to: number) {
+  readFrom = from;
+  pickedHalf = false;
   reading = { done: 0, total: to - from + 1, found: 0 };
   unit.progress = "reading";
   render();
   const stop = await listen<Reading>("backup-progress", (e) => {
     reading = e.payload;
+    const i = e.payload.slot;
+    if (i != null && e.payload.name != null && bank.slots[i]) {
+      if (bank.slots[i].name == null) bank.occupied += 1;
+      bank.slots[i].name = e.payload.name;
+    }
+    // Follow the read onto the second page (banks 20–39).
+    if (view === "banks" && i != null && i + 1 >= 100 && half === 0 && !pickedHalf) {
+      half = 1;
+      render();
+    }
     showProgress();
   });
   try {
@@ -252,7 +285,7 @@ function header(): string {
     <div class="brand">${logo()}<span>G-System Editor</span></div>
     <nav class="seg" aria-label="Mode">${tabs}</nav>
     <div class="file">
-      <span class="name">${fileName() ? esc(fileName()!) : "No bank loaded"}</span>
+      <span class="name">${fileName() ? esc(fileName()!) : reading ? "Reading from the G-System…" : bank.occupied ? "From the G-System" : "No bank loaded"}</span>
       ${bank.dirty.length ? `<span class="pill">${bank.dirty.length} edited</span>` : ""}
     </div>
     <button class="btn icon" id="mode" title="Light or dark" aria-label="Switch light or dark"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg></button>
@@ -323,9 +356,12 @@ function banksView(): string {
       const i = b * 5 + p;
       const s = bank.slots[i];
       const name = s?.name;
-      return `<div class="cell ${selected === i ? "sel" : ""}" data-i="${i}" draggable="${name != null}">
+      const done = reading ? readFrom + reading.done : 0;
+      const waiting = reading != null && i >= done && i < readFrom + reading.total;
+      const state = waiting ? (i === done ? "reading" : "pending") : "";
+      return `<div class="cell ${selected === i ? "sel" : ""} ${state}" data-i="${i}" draggable="${name != null}">
         <span class="lbl">${s?.label ?? ""}</span>
-        <span class="nm ${name == null ? "empty" : ""}">${name == null ? "—" : esc(name)}</span>
+        <span class="nm ${name == null ? "empty" : ""}">${name == null ? (waiting ? "…" : "—") : esc(name)}</span>
         ${dirty.has(i) ? `<span class="dot" title="Changed since last sync"></span>` : ""}
       </div>`;
     }).join("");
@@ -336,12 +372,18 @@ function banksView(): string {
     <section class="center">
       <div class="toolbar">
         <div class="seg"><button class="${half === 0 ? "on" : ""}" data-half="0">Banks 00–19</button><button class="${half === 1 ? "on" : ""}" data-half="1">Banks 20–39</button></div>
-        <span class="dim">${defined} of 200 defined</span>
+        <span class="dim" data-defined>${defined} of 200 defined</span>
         <div class="right">
-          ${reading ? `<span class="dim" data-progress>${progressText(reading)}</span><button class="btn sm" id="stopread">Stop</button>` : `<button class="btn sm" id="getall" ${unit.connected ? "" : "disabled"}>Read all from unit</button>`}
+          ${reading ? "" : `<button class="btn sm" id="getall" ${unit.connected ? "" : "disabled"}>Read all from unit</button>`}
           <button class="btn sm amber" id="syncdirty" disabled title="${WRITE_DISABLED}">Sync ${bank.dirty.length || ""} changed →</button>
         </div>
       </div>
+      ${reading ? `<div class="readbar" role="status">
+          <span class="spin" aria-hidden="true"></span>
+          <div class="rb-text"><b>Reading from the G-System</b><span data-progress>${progressText(reading)}</span></div>
+          <button class="btn sm" id="stopread">Stop</button>
+          ${progressBar(reading)}
+        </div>` : ""}
       <div class="gridwrap">
         <div class="grow head"><div>Bank</div><div>Switch 1</div><div>Switch 2</div><div>Switch 3</div><div>Switch 4</div><div>Switch 5</div></div>
         ${rows.join("")}
@@ -669,7 +711,7 @@ function wire() {
   on("open", doOpen);
   on("save", doSave);
   document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((b) => (b.onclick = () => go(b.dataset.view as View)));
-  document.querySelectorAll<HTMLButtonElement>("[data-half]").forEach((b) => (b.onclick = () => { half = Number(b.dataset.half) as 0 | 1; render(); }));
+  document.querySelectorAll<HTMLButtonElement>("[data-half]").forEach((b) => (b.onclick = () => { half = Number(b.dataset.half) as 0 | 1; pickedHalf = true; render(); }));
   on("getall", () => midiBackup(0, 199));
   on("syncdirty", syncDirty);
   on("edit", () => go("preset"));
@@ -682,7 +724,8 @@ function wire() {
   on("offline", () => (bank.occupied ? go("banks") : doOpen()));
   on("rescan", loadPorts);
   on("stopread", () => invoke("midi_cancel"));
-  on("connect", async () => { if (await identify()) { await midiBackup(0, 199); go("banks"); } else render(); });
+  // Show the bank right away and fill it in as the unit answers.
+  on("connect", async () => { if (await identify()) { view = "banks"; await midiBackup(0, 199); } else render(); });
   const pin = document.getElementById("pin") as HTMLSelectElement | null;
   const pout = document.getElementById("pout") as HTMLSelectElement | null;
   if (pin) pin.onchange = () => (portIn = pin.value);
