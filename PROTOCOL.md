@@ -55,6 +55,9 @@ param `0x1D`). We first misread it as a preset request.
 - Bytes 0–19: name. Bytes after the NUL aren't cleared. The unit sets bit 7 on
   some name bytes as a flag **[DA]**: the character is the low 7 bits
   ("[ÒHY]" is "[RHY]" with flags). Preserve the bits; mask them for display.
+  Some community presets also show values like 128, 158 or 194 in parameters
+  whose range is 0–1 or 0–60, i.e. a valid value with bit 7 set. It may be
+  the same flag; unconfirmed, so `validate` still reports them.
   Byte 20 is always `00`.
 - Bytes 21–515: **165 fields, signed 24-bit little-endian.**
 
@@ -131,11 +134,12 @@ FORM <len> "BANK"
   RECV n     receive script
   BODY n     "User Bank": 200 × 1310-byte slots, each a 1044-byte dump zero-padded
              (slots ≥ 10 have the 10-byte header zeroed). "Preset buffer" (.Prs): one
-             such slot, header zeroed, but often a stale snapshot: in many community
-             files its checksum fails and it decodes as a different preset ("Test the
-             taste" → "Rebel Yell Ray Gun"). The preset Vyzor actually sends lives in
-             the TRAN script; decoding that is still to do. "Edit Buffer" (.Ebf):
-             a 1246-byte body with a shorter, older dump layout; also still to do.
+             such slot, header zeroed. The TRAN script builds the dump from it and
+             computes the checksum when sending, so the stored checksum is often
+             stale: don't use it to reject (see vyzor::decode_preset_buffer).
+             "Edit Buffer" (.Ebf): 1246 bytes, the same dump without its last
+             7 bytes (end of modifier slot 38 and the NovaDrive fields), then a
+             checksum and usually F7 (vyzor::decode_edit_buffer).
 ```
 
 ## Global settings [DA]
