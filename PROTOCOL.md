@@ -52,8 +52,10 @@ param `0x1D`). We first misread it as a preset request.
 
 - 516 bytes, sent as 1032 nibble bytes (high nibble first). Checksum =
   `sum(nibbles) & 0x7F`. Verified on all 100 factory presets.
-- Bytes 0–19: name. Bytes after the NUL aren't cleared. DA reports that the unit
-  sets bit 7 on some name bytes; preserve it. Byte 20 is always `00`.
+- Bytes 0–19: name. Bytes after the NUL aren't cleared. The unit sets bit 7 on
+  some name bytes as a flag **[DA]**: the character is the low 7 bits
+  ("[ÒHY]" is "[RHY]" with flags). Preserve the bits; mask them for display.
+  Byte 20 is always `00`.
 - Bytes 21–515: **165 fields, signed 24-bit little-endian.**
 
 ### Field map
@@ -128,7 +130,12 @@ FORM <len> "BANK"
   TRAN n     transmit script (bytecode: 08 <u32 len> <sysex> = send, 06 <u32 ms> = wait)
   RECV n     receive script
   BODY n     "User Bank": 200 × 1310-byte slots, each a 1044-byte dump zero-padded
-             (slots ≥ 10 have the 10-byte header zeroed). "Preset": routing data.
+             (slots ≥ 10 have the 10-byte header zeroed). "Preset buffer" (.Prs): one
+             such slot, header zeroed, but often a stale snapshot: in many community
+             files its checksum fails and it decodes as a different preset ("Test the
+             taste" → "Rebel Yell Ray Gun"). The preset Vyzor actually sends lives in
+             the TRAN script; decoding that is still to do. "Edit Buffer" (.Ebf):
+             a 1246-byte body with a shorter, older dump layout; also still to do.
 ```
 
 ## Global settings [DA]
