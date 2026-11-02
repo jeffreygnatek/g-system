@@ -513,6 +513,19 @@ struct BackupProgress {
     found: usize,
     /// The preset's name when this slot answered (empty slots don't).
     name: Option<String>,
+    /// The unit answered that this slot is damaged (`28` message).
+    damaged: bool,
+}
+
+#[derive(Serialize)]
+struct BackupResult {
+    received: Vec<usize>,
+    damaged: Vec<usize>,
+}
+
+enum SlotAnswer {
+    Preset(Preset),
+    Damaged,
 }
 
 /// Read user slots `from..=to` from the unit into the open bank, emitting a
@@ -525,7 +538,7 @@ async fn midi_backup(
     from: usize,
     to: usize,
     app: AppHandle,
-) -> Result<Vec<usize>, String> {
+) -> Result<BackupResult, String> {
     blocking(move || {
         let state = app.state::<AppState>();
         state.cancel.store(false, Ordering::SeqCst);
@@ -533,6 +546,7 @@ async fn midi_backup(
         let to = to.min(199);
         let total = to + 1 - from;
         let mut got = Vec::new();
+        let mut damaged = Vec::new();
         // For a useful error when nothing usable comes back.
         let mut heard = 0usize;
         let mut first_heard: Option<Vec<u8>> = None;
@@ -546,23 +560,35 @@ async fn midi_backup(
                 .map_err(|e| e.to_string())?;
             let want = gsystem_protocol::sysex::slot_to_number(slot);
             // A stored preset answers in ~0.77 s.
-            let p = m.wait(Duration::from_millis(1100), |b| {
+            let answer = m.wait(Duration::from_millis(1100), |b| {
                 heard += 1;
                 if first_heard.is_none() {
                     first_heard = Some(b.to_vec());
                 }
                 match Message::parse_lenient(b) {
                     Ok(Message::PresetDump { number, data, .. }) if number == want => {
-                        Preset::from_raw(data)
+                        Preset::from_raw(data).map(SlotAnswer::Preset)
+                    }
+                    Ok(Message::CorruptPreset { number, .. }) if number == want => {
+                        Some(SlotAnswer::Damaged)
                     }
                     _ => None,
                 }
             });
-            let name = p.as_ref().map(|p| p.name());
-            if let Some(p) = p {
-                state.bank.lock().unwrap().set(slot, p);
-                state.dirty.lock().unwrap().remove(&slot);
-                got.push(slot);
+            let mut name = None;
+            let mut is_damaged = false;
+            match answer {
+                Some(SlotAnswer::Preset(p)) => {
+                    name = Some(p.name());
+                    state.bank.lock().unwrap().set(slot, p);
+                    state.dirty.lock().unwrap().remove(&slot);
+                    got.push(slot);
+                }
+                Some(SlotAnswer::Damaged) => {
+                    is_damaged = true;
+                    damaged.push(slot);
+                }
+                None => {}
             }
             let _ = app.emit(
                 "backup-progress",
@@ -572,10 +598,11 @@ async fn midi_backup(
                     total,
                     found: got.len(),
                     name,
+                    damaged: is_damaged,
                 },
             );
         }
-        if got.is_empty() && heard > 0 {
+        if got.is_empty() && damaged.is_empty() && heard > 0 {
             let first = first_heard.unwrap_or_default();
             return Err(format!(
                 "The unit sent {heard} message(s) but no preset dumps were recognised. First one ({} bytes): {}",
@@ -583,7 +610,10 @@ async fn midi_backup(
                 first.iter().take(24).map(|x| format!("{x:02X}")).collect::<Vec<_>>().join(" ")
             ));
         }
-        Ok(got)
+        Ok(BackupResult {
+            received: got,
+            damaged,
+        })
     })
     .await
 }

@@ -51,7 +51,9 @@ let globalsBusy = false;
 let live = false;
 let pedalSlot: number | null = null;
 // A bank read in progress (the unit answers about one preset per second).
-type Reading = { done: number; total: number; found: number; slot?: number; name?: string | null };
+type Reading = { done: number; total: number; found: number; slot?: number; name?: string | null; damaged?: boolean };
+// Slots the unit reported as damaged in the last read (its own memory, not the file).
+let damagedSlots = new Set<number>();
 let reading: Reading | null = null;
 let readFrom = 0; // first slot of the read in progress
 let pickedHalf = false; // the user chose a page during the read: don't flip it for them
@@ -208,6 +210,9 @@ function showProgress() {
         nm.classList.remove("empty");
         cell.classList.add("arrived");
         cell.draggable = true;
+      } else if (r.damaged) {
+        nm.textContent = "damaged on unit";
+        cell.classList.add("damaged");
       } else {
         nm.textContent = "—";
       }
@@ -217,6 +222,7 @@ function showProgress() {
 }
 async function midiBackup(from: number, to: number) {
   readFrom = from;
+  for (let i = from; i <= to; i++) damagedSlots.delete(i);
   pickedHalf = false;
   reading = { done: 0, total: to - from + 1, found: 0 };
   unit.progress = "reading";
@@ -224,6 +230,7 @@ async function midiBackup(from: number, to: number) {
   const stop = await listen<Reading>("backup-progress", (e) => {
     reading = e.payload;
     const i = e.payload.slot;
+    if (i != null && e.payload.damaged) damagedSlots.add(i);
     if (i != null && e.payload.name != null && bank.slots[i]) {
       if (bank.slots[i].name == null) bank.occupied += 1;
       bank.slots[i].name = e.payload.name;
@@ -236,14 +243,16 @@ async function midiBackup(from: number, to: number) {
     showProgress();
   });
   try {
-    const got = await invoke<number[]>("midi_backup", { input: portIn, output: portOut, from, to });
+    const res = await invoke<{ received: number[]; damaged: number[] }>("midi_backup", { input: portIn, output: portOut, from, to });
+    const got = res.received;
     const stopped = reading && reading.done < reading.total;
     unit = { ...unit, connected: true, progress: undefined };
     await refresh();
-    setStatus(
-      got.length ? `${stopped ? "Stopped. " : ""}Received ${got.length} preset${got.length === 1 ? "" : "s"}` : stopped ? "Stopped." : "No presets answered. Empty slots don't answer.",
-      !got.length && !stopped,
-    );
+    const parts = [
+      got.length ? `Received ${got.length} preset${got.length === 1 ? "" : "s"}` : "No presets received",
+      res.damaged.length ? `${res.damaged.length} slot${res.damaged.length === 1 ? "" : "s"} damaged on the unit` : "",
+    ].filter(Boolean);
+    setStatus(`${stopped ? "Stopped. " : ""}${parts.join(" · ")}`, !got.length && !stopped);
   } catch (e) {
     unit = { connected: false };
     setStatus(String(e), true);
@@ -359,9 +368,10 @@ function banksView(): string {
       const done = reading ? readFrom + reading.done : 0;
       const waiting = reading != null && i >= done && i < readFrom + reading.total;
       const state = waiting ? (i === done ? "reading" : "pending") : "";
-      return `<div class="cell ${selected === i ? "sel" : ""} ${state}" data-i="${i}" draggable="${name != null}">
+      const bad = name == null && damagedSlots.has(i);
+      return `<div class="cell ${selected === i ? "sel" : ""} ${state} ${bad ? "damaged" : ""}" data-i="${i}" draggable="${name != null}" ${bad ? `title="The G-System reports this slot's memory as damaged. Storing a preset into it on the unit may fix it."` : ""}>
         <span class="lbl">${s?.label ?? ""}</span>
-        <span class="nm ${name == null ? "empty" : ""}">${name == null ? (waiting ? "…" : "—") : esc(name)}</span>
+        <span class="nm ${name == null ? "empty" : ""}">${name == null ? (waiting ? "…" : bad ? "damaged on unit" : "—") : esc(name)}</span>
         ${dirty.has(i) ? `<span class="dot" title="Changed since last sync"></span>` : ""}
       </div>`;
     }).join("");

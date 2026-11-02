@@ -50,7 +50,7 @@ const server = http.createServer((req, res) => {
           }
           case "midi_ports": return { inputs: ["G-System"], outputs: ["G-System"] };
           case "midi_identify": return "01 00 04 02";
-          case "midi_backup": bank = loaded; return factory.map((p) => p.slot);
+          case "midi_backup": bank = loaded; return { received: factory.map((p) => p.slot), damaged: [] };
           default: return null;
         }
       },
