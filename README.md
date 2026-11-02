@@ -50,6 +50,12 @@ inspector for the selected preset. Amber dots mark slots that differ from the un
 
 ![Banks view](docs/screenshots/banks.png)
 
+Reading from the unit fills the bank in as each slot answers (about a second
+per slot), with progress and a Stop button. Slots that were never written show
+as empty.
+
+![Reading the bank from the unit](docs/screenshots/reading.png)
+
 **Factory**: the 100 presets built into the G-System, labelled A0-1 to B9-5
 as the unit's display shows them. Click one to see its signal chain,
 *Audition* it on the unit (it follows *Live* mode too), or copy it into the
@@ -95,8 +101,10 @@ editor draws Gate first and EQ last. Corrections welcome.
 </tr>
 </table>
 
-Screenshots are generated from the real frontend with the factory set loaded;
-see `tools/screenshots`.
+Screenshots are generated from the real frontend. The user bank shown is
+[`examples/vh4-starter.syx`](examples/vh4-starter.syx), the agent-made starter
+set described under [MCP](#design-presets-with-an-ai-agent-mcp); the Global
+tab shows settings read from a real unit. See `tools/screenshots`.
 
 ## Sharing presets online (coming soon)
 
@@ -189,6 +197,7 @@ given. There is also a `design_preset` prompt with guidance for the agent.
 For example, from the brief "basic patches for a four-channel amp switched over
 MIDI (a Diezel VH4)", an agent wrote one patch per channel plus variations, and
 a copy of each with the Insert on for the four-cable method in banks 20–21.
+That set is in [`examples/vh4-starter.syx`](examples/vh4-starter.syx).
 
 **Safety model.** The agent never stores anything on the unit. Changes go to
 the bank file (written atomically after each change; the first change of a
