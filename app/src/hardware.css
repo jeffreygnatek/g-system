@@ -1,0 +1,111 @@
+/* "Hardware" finish: the look of the G-System itself.
+   Michroma for panel lettering (the unit's wide engraved type), VT323 for the green
+   preset LCD, Doto for the red dot-matrix bank display, IBM Plex for everything else.
+   All SIL Open Font License, bundled locally (no network needed in the app).
+   Direction inspired by davidavalanches/gsystem-editor's "anthracite" skin. */
+
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/michroma/400.css";
+@import "@fontsource/vt323/400.css";
+@import "@fontsource/doto/800.css";
+
+:root {
+  --bg: #26272a;
+  --bg-2: #2b2c2f;
+  --panel: #333437;
+  --panel-2: #3a3b3e;
+  --raised: #3e4044;
+  --line: #4a4c50;
+  --line-2: #55585d;
+  --text: #ececec;
+  --text-2: #d9dce0;
+  --muted: #b4b7bb;
+  --muted-2: #8a8d92;
+  /* "On" is a red LED, as on the unit's switches. */
+  --amber: #ff5a47;
+  --amber-bg: rgba(255, 90, 71, 0.12);
+  --amber-line: #8a3a31;
+  --amber-text: #ff8a7a;
+  /* Selection and sliders: same red; buttons stay neutral metal. */
+  --blue: #ff5a47;
+  --blue-bg: rgba(255, 255, 255, 0.08);
+  --blue-btn: #4a4c50;
+  --blue-line: #6a6d72;
+  --green: #5bc46a;
+  --edited: #f2c230;
+  --lcd: #b5d334;
+  --lcd-ink: #1f2a08;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --display: "Michroma", "IBM Plex Sans", sans-serif;
+  --lcd-font: "VT323", ui-monospace, monospace;
+  --led-font: "Doto", ui-monospace, monospace;
+  --scanlines: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.04) 0 1px, transparent 1px 3px);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+
+body, .gridwrap, .card, .tile, .panel { background-image: var(--scanlines); }
+
+/* Header: the unit's black display band. */
+header.top { background: #0b0b0c; border-bottom-color: #000; }
+header.top .brand { font-family: var(--display); font-weight: 400; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.seg { background: #000; border-color: #1e1f21; }
+.seg > button { font-family: var(--display); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.seg > button.on { background: #2b2c2f; color: #fff; }
+
+/* Engraved lettering. */
+.eyebrow, .grow.head, .tile .t, .card .hd .ttl, .chain-mini .k, .loops4 .k, .connect h1 {
+  font-family: var(--display); font-weight: 400; letter-spacing: .06em;
+}
+.connect h1 { text-transform: uppercase; font-size: 20px; }
+.grow .bankno { font-family: var(--display); font-size: 13px; color: var(--muted-2); }
+
+/* Preset display: red dot-matrix slot + green LCD name. */
+.strip { background: #0b0b0c; border-bottom-color: #000; }
+.lcd { padding: 0; gap: 0; background: none; border: 0; border-radius: 0; overflow: hidden; }
+.lcd .slot {
+  display: flex; align-items: center; height: 44px; padding: 0 12px; background: #3a0d0a;
+  color: #ff3b2a; font-family: var(--led-font); font-weight: 800; font-size: 26px;
+  text-shadow: 0 0 6px rgba(255, 59, 42, .7);
+}
+.lcd .sep { display: none; }
+.lcd > span:last-child {
+  display: flex; align-items: center; height: 44px; min-width: 260px; padding: 0 14px;
+  margin-left: 8px; background: var(--lcd); color: var(--lcd-ink);
+  font-family: var(--lcd-font); font-size: 26px; letter-spacing: .02em;
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, .25);
+}
+.lcd > span:last-child .dim { color: rgba(31, 42, 8, .55); }
+
+/* Footswitches: chrome domes; the lit one gets a red ring. */
+.fsw {
+  border: 0; color: var(--dark-ink, #1a1b1d); font-weight: 600;
+  background: radial-gradient(circle at 38% 30%, #fff 0%, #eef0f2 20%, #c4c8cd 48%, #8f949a 72%, #c9cdd1 90%, #7d8187 100%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .6);
+}
+.fsw.on { background: radial-gradient(circle at 38% 30%, #fff 0%, #eef0f2 20%, #c4c8cd 48%, #8f949a 72%, #c9cdd1 90%, #7d8187 100%); color: #1a1b1d; box-shadow: 0 0 0 3px #ff3b2a, 0 0 12px rgba(255, 59, 42, .7); }
+
+/* Effect tiles and chips: LED on, panel stays dark. */
+.tile.on, .chain-mini > div.on, .loops4 > div.on, .loops4 > button.on, .tag.on {
+  background: var(--panel-2); border-color: var(--line-2); color: var(--text);
+}
+.tile.on .t, .chain-mini > div.on .k, .loops4 > div.on .k, .loops4 > button.on .k, .tag.on { color: #fff; }
+.tile .t i { background: #1e1f21; box-shadow: inset 0 0 0 1px #555; }
+.tile.on .t i { background: #ff3b2a; box-shadow: 0 0 8px #ff3b2a; }
+.tile.focus { outline-color: #ff5a47; }
+
+/* Bank grid: edited marker stays amber, selection is a red bar like theirs. */
+.cell .dot, .legend .dot { background: var(--edited); }
+.cell.sel { background: rgba(255, 255, 255, .08); box-shadow: inset 3px 0 0 #ff5a47; }
+.cell .nm { font-family: var(--mono); }
+
+.toggle.on { background: #ff5a47; }
+.card { border-radius: 4px; }
+.card .hd { background: rgba(0, 0, 0, .12); }
+.btn.primary { background: #ececec; color: #111; border-color: #ececec; }
+.btn.amber, .pill.amber, .banner { background: rgba(242, 194, 48, .1); border-color: #6b5714; color: var(--edited); }
+.tile .t { font-size: 9.5px; letter-spacing: .04em; gap: 6px; }
+.chain-mini .k { font-size: 9px; }
