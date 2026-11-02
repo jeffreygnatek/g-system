@@ -5,10 +5,12 @@ Sources, and how much to trust each line:
 - **[ours]** derived here from files: the Vyzor `.SQS`/`.Prs` banks, the 3.00
   firmware updater, and the Vyzor quick-start manual's screenshots. Verified
   by tests in `crates/gsystem-protocol/tests`.
-- **[DA]** hardware observations published by the independent
+- **[DA]** the independent
   [davidavalanches/gsystem-editor](https://github.com/davidavalanches/gsystem-editor)
-  project (GPL-3.0), which has been tested against a real unit. We
-  reimplemented these facts; no code or tables were copied. Their project is
+  project (GPL-3.0, © David Avalanches), tested against a real unit. Its
+  parameter tables, levels and tempo code are ported to Rust here
+  (`params.rs`, `levels.rs`, `tempo.rs`, from commit 9b50ef8), with credit in
+  each file. Their project is
   further along than ours. If you just want a working editor, use theirs:
   <https://davidavalanches.github.io/gsystem-editor/>.
 
@@ -53,29 +55,32 @@ param `0x1D`). We first misread it as a preset request.
   sets bit 7 on some name bytes; preserve it. Byte 20 is always `00`.
 - Bytes 21–515: **165 fields, signed 24-bit little-endian.**
 
-### Field map [ours]
+### Field map
 
-Fields 0–2 hold a header (not decoded). Then eight effect blocks sit in fixed
-slots in storage order. Each is stored as `[count][type][on/off][params…]`,
-padded with `-1`:
+- Field 0: packed routing, boost, boost level, relay switch, loops 1–4, insert,
+  relay settings A/B; field 2: left/right output levels **[DA]** →
+  `crates/gsystem-protocol/src/levels.rs`.
+- Fields 3–124: eight effect blocks in fixed slots, in storage order Comp (3),
+  Filter (13), Mod (29), Pitch (44), Reverb (64), Gate (80), Delay (86),
+  EQ (114). Each is `[count][type][params…]`, padded with -1 **[ours, DA]**.
+  Which parameters follow the type depends on it; the full tables (names,
+  ranges, value lists, from firmware 4.02) are in
+  `crates/gsystem-protocol/src/params.rs`, ported from DA's `params.ts`.
+- Fields 125–164: modifier/pedal assignments (not ported yet).
 
-| block | count field | slot length | type | on/off | notes |
-|---|---|---|---|---|---|
-| Comp | 3 | 10 | 4 | 5 | 6 threshold, 7 ratio, 8 attack, 9 release, **10 gain, 11 drive, 12 response** |
-| Filter | 13 | 16 | 14 | 15 | params depend on type (count 11–15) |
-| Mod | 29 | 15 | 30 | 31 | params depend on type (count 11–14) |
-| Pitch | 44 | 20 | 45 | 46 | **51/52 delay L/R ms, 57 mix**, 62/63 detune voices |
-| Reverb | 64 | 16 | 65 | 66 | 67 decay (×0.1 s), 68 pre-delay, 69 shape, 70 size, 71 hi color, 72 hi level, 73 lo color, 74 lo level, 75 early, 76 level, 77 diffusion, 78 mix, 79 out |
-| Gate | 80 | 6 | — | 81 | 82 mode (Hard/Soft), 83 threshold, 84 damping, 85 release |
-| Delay | 86 | 28 | 87 | 88 | 89 time ms, 96 feedback, 102 FB high cut, 103 FB low cut, 106 mix |
-| EQ | 114 | 11 | — | 124 | 115/118/121 gain, 116/119/122 freq, 117/120/123 width |
+Older presets store fewer parameters than the 4.02 tables list (the count
+field says how many; e.g. "Scotty's Blues" Auto Wah has 11, without AutoOn).
+`Block::stored_fields` respects that **[ours]**.
 
-Frequencies are a sixth-octave index: `Hz = 20 · 2^(i/6)`. EQ width is
-`(i + 1) / 10` octaves. Every bold or listed field was checked against the
-values Vyzor's manual shows for "Scotty's Blues" (51/51 match; see
-`block_map_matches_vyzor_screenshot`). Type lists follow the order in Vyzor's
-menus. Fields 125–164 hold packed levels, routing, loop/insert/boost switches
-and assignments; these aren't decoded yet.
+Frequencies are a sixth-octave index (`Hz = 20 · 2^(i/6)`), modulation speeds a
+1/24-octave index from 0.05 Hz, EQ width `(i + 1) / 10` octaves.
+
+Verification: `parameter_tables_match_vyzor_screenshot` reads every value
+Vyzor's manual shows for "Scotty's Blues" through the ported tables. That
+cross-checks our independently derived field positions against DA's firmware
+tables, and they agree. It also caught a one-step error in the original EQ
+width display, which is fixed in the port. `tools/xcheck` diffs the port
+against the original TypeScript: 0 differences.
 
 ## Storing presets — read this first
 
@@ -113,7 +118,6 @@ FORM <len> "BANK"
 
 ## Still open
 
-- Filter and Modulation per-type parameter positions; pitch voices for types other than Detune.
-- Fields 0–2 and 125–164 (levels, routing, loops/insert/boost, switch and modifier assignments).
-- Global (system) settings.
+- Not yet ported from DA: modifiers (fields 125–164), footswitch assignments,
+  globals, NovaDrive. All exist in their code.
 - A store sequence that doesn't risk freezing the unit.

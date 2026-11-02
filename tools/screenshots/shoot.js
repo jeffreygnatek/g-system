@@ -1,5 +1,5 @@
-// Screenshot the real app frontend with the Tauri backend mocked from the
-// factory-set JSON (gsys json output). No values are invented: slots, names
+// Screenshot the real app frontend with the Tauri backend mocked from
+// pre-rendered preset views (gsys preset-views output). No values are invented: slots, names
 // and params come straight from the decoded dump.
 const { chromium } = require("playwright");
 const fs = require("fs");
@@ -49,10 +49,7 @@ const server = http.createServer((req, res) => {
       invoke: async (cmd, args) => {
         switch (cmd) {
           case "get_bank": return bank;
-          case "slot_detail": {
-            const p = factory.find((x) => x.slot === args.index);
-            return { index: p.slot, label: p.label, name: p.name, params_i24: p.params_i24, raw_hex: p.raw_hex };
-          }
+          case "preset_view": return factory.find((x) => x.slot === args.index).view;
           case "midi_ports": return { inputs: ["G-System"], outputs: ["G-System"] };
           case "midi_identify": return "01 00 04 02";
           case "midi_backup": bank = loaded; return factory.map((p) => p.slot);

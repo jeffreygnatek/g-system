@@ -8,9 +8,14 @@
 //! Transport (MIDI, HID) lives in other crates.
 
 pub mod bank;
+pub mod levels;
+pub mod params;
 pub mod preset;
 pub mod sysex;
 pub mod syx;
+pub mod tempo;
+#[cfg(feature = "serde")]
+pub mod view;
 pub mod vyzor;
 
 pub use bank::Bank;

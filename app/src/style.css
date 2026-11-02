@@ -216,3 +216,9 @@ aside.inspector {
 .rowbtns { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rowbtns .btn { height: 38px; border-radius: 8px; padding: 0 16px; }
 .rowbtns a { margin-left: auto; color: #9bb8e8; }
+
+/* loops + insert as toggle buttons */
+.loops4.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.loops4 > button { padding: 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); text-align: left; }
+.loops4 > button.on { background: var(--amber-bg); border-color: var(--amber-line); }
+.loops4 > button.on .k, .loops4 > button.on .v { color: var(--amber); }

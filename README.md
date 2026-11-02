@@ -8,14 +8,14 @@ runs on current operating systems.
 > [G-System Editor by David Avalanches](https://davidavalanches.github.io/gsystem-editor/)
 > ([source](https://github.com/davidavalanches/gsystem-editor), GPL-3.0), has been
 > tested on real hardware and runs on macOS, Linux and Android. This repo started
-> separately and now builds on facts that project published (credited in
-> `PROTOCOL.md`).
+> separately; its parameter tables, levels and tempo code are now ported to Rust
+> from that project (credited in each file and in `PROTOCOL.md`).
 
 Status: **reading works; writing to the unit is disabled.** Banks and presets
 load from `.SQS`/`.syx` files and from the unit over MIDI. The unit's own USB
-port shows up as a MIDI device, so no interface is needed. Preset parameters are
-mapped for Comp, Pitch, Reverb, Gate, Delay and EQ, and every block's type and
-on/off is decoded. Storing presets is turned off in the app because the
+port shows up as a MIDI device, so no interface is needed. Every effect block,
+type and parameter is decoded and editable, along with routing, loops, insert,
+boost and tempo. Storing presets is turned off in the app because the
 store sequence the original editor uses can freeze the G-System; see
 `PROTOCOL.md` → "Storing presets".
 
@@ -36,8 +36,8 @@ inspector for the selected preset. Amber dots mark slots that differ from the un
 ![Banks view](docs/screenshots/banks.png)
 
 **Preset** — the signal chain in audio order, then one card per effect block.
-Parameters come from the field map in `PROTOCOL.md`; Filter and Modulation
-parameters are still to be mapped.
+Every block shows the parameters of its current effect type, with value lists,
+units and ranges from the firmware tables.
 
 ![Preset view](docs/screenshots/preset.png)
 
@@ -87,7 +87,8 @@ npm run tauri build                          # .app / .deb / .msi
 ```
 gsys list <file>                 slots and names from .SQS / .syx / .Prs
 gsys export <in.SQS> <out.syx>   plain SysEx dump of all occupied slots
-gsys json <file>                 names + 165 int24 fields per preset
+gsys show <file> <slot>          decode one preset: every block, type and parameter
+gsys json <file>                 raw fields + decoded view per preset
 gsys scripts <file.Prs>          SysEx the old editor sent/expected for that preset
 gsys rename <in.syx> <slot> "<name>" <out.syx>
 

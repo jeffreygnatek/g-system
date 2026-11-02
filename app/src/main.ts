@@ -1,10 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { BLOCKS, PRESET_MISC, TEMPO_DIVISIONS, formatValue, type Block, type Param } from "./model";
 
 type Slot = { index: number; label: string; name: string | null };
 type BankView = { path: string | null; occupied: number; dirty: number[]; slots: Slot[] };
-type Detail = { index: number; label: string; name: string; params_i24: number[]; raw_hex: string };
+// Decoded by the Rust core (gsystem_protocol::params / levels / tempo).
+type Row = { field: number; label: string; value: number; display: string; lo: number; hi: number; choices: string[] | null };
+type BlockView = { key: string; label: string; on: boolean; types: string[]; type_index: number | null; rows: Row[] };
+type ChainView = { key: string; name: string; on: boolean; summary: string };
+type Detail = {
+  index: number; label: string; name: string; chain: ChainView[]; blocks: BlockView[];
+  routing: number; routings: string[]; loops: boolean[]; insert: boolean; boost: boolean; boost_level: number; bpm: number | null;
+};
+type Edit =
+  | { kind: "field"; field: number; value: number }
+  | { kind: "type"; block: string; value: number }
+  | { kind: "toggle"; key: string }
+  | { kind: "routing"; value: number }
+  | { kind: "boost_level"; value: number }
+  | { kind: "bpm"; value: number };
 type Ports = { inputs: string[]; outputs: string[] };
 type View = "connect" | "banks" | "preset" | "global";
 
@@ -46,7 +59,7 @@ function go(v: View) {
 async function refresh(v?: BankView) {
   bank = v ?? (await invoke<BankView>("get_bank"));
   if (selected != null && bank.slots[selected]?.name != null) {
-    detail = await invoke<Detail>("slot_detail", { index: selected });
+    detail = await invoke<Detail>("preset_view", { index: selected });
   } else {
     detail = null;
   }
@@ -165,31 +178,19 @@ function header(): string {
 function logo() {
   return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="3" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="12" r="1.6" fill="#f0b243"/><circle cx="12" cy="12" r="1.6" fill="#f0b243"/><circle cx="16" cy="12" r="1.6" fill="#f0b243"/></svg>`;
 }
-function blockOn(b: Block): boolean | null {
-  if (!detail || b.enabledIndex == null) return null;
-  return detail.params_i24[b.enabledIndex] !== 0;
-}
-function blockType(b: Block): string {
-  if (!detail || b.typeIndex == null) return b.types.length ? "—" : "";
-  return b.types[detail.params_i24[b.typeIndex]] ?? "?";
-}
 function strip(): string {
   const s = selected != null ? bank.slots[selected] : null;
   const bankNo = selected != null ? Math.floor(selected / 5) : null;
   const sw = [1, 2, 3, 4, 5].map((n) => `<span class="fsw ${selected != null && selected % 5 === n - 1 ? "on" : ""}">${n}</span>`).join("");
-  const tags = BLOCKS.filter((b) => b.types.length || b.id === "eq" || b.id === "boost")
-    .map((b) => { const on = blockOn(b); return `<span class="tag ${on ? "on" : ""}">${esc(b.name.toUpperCase())}</span>`; })
+  const tags = (detail?.chain ?? []).filter((c) => !c.key.startsWith("loop") && c.key !== "insert")
+    .map((c) => `<span class="tag ${c.on ? "on" : ""}">${esc(c.name.toUpperCase())}</span>`)
     .join("");
   return `<section class="strip" aria-label="Unit status">
     <div class="lcd"><span class="slot">${s ? s.label : "--·-"}</span><span class="sep">│</span><span>${s?.name ? esc(s.name) : "<span class='dim'>no preset</span>"}</span></div>
     <div class="switches"><span class="eyebrow">Bank ${bankNo != null ? String(bankNo).padStart(2, "0") : "--"}</span>${sw}</div>
     <div class="blocks">${tags}</div>
-    <div class="tempo"><span class="muted">TEMPO</span><span>${tempoText()}</span><button class="btn sm">TAP</button></div>
+    <div class="tempo"><span class="muted">TEMPO</span><span>${detail?.bpm != null ? `${detail.bpm} BPM` : "— BPM"}</span></div>
   </section>`;
-}
-function tempoText() {
-  const p = PRESET_MISC.tempo[0];
-  return detail && p.index != null ? formatValue(p, detail.params_i24[p.index]) : "— BPM";
 }
 
 // ---------------------------------------------------------------- banks view
@@ -235,10 +236,9 @@ function inspector(): string {
   if (!s || s.name == null || !detail) {
     return `<aside class="inspector"><div class="eyebrow">Preset</div><div class="note">Select a slot to see what's in it. Double-click a name to rename, drag to move.</div>${unitPanel()}</aside>`;
   }
-  const mini = BLOCKS.filter((b) => b.types.length || b.id === "eq").map((b) => {
-    const on = blockOn(b);
-    return `<div class="${on ? "on" : ""}"><div class="k">${esc(b.name)}</div><div class="v">${on === null ? "—" : on ? esc(blockType(b) || "On") : "Off"}</div></div>`;
-  }).join("");
+  const mini = detail.chain.filter((c) => ["filter", "comp", "mod", "pitch", "delay", "reverb", "eq", "gate", "boost"].includes(c.key))
+    .map((c) => `<div class="${c.on ? "on" : ""}"><div class="k">${esc(c.name)}</div><div class="v">${esc(c.summary)}</div></div>`)
+    .join("");
   const dirty = dirtySet().has(selected!);
   return `<aside class="inspector">
     <div>
@@ -273,72 +273,51 @@ function unitPanel(): string {
 }
 
 // ---------------------------------------------------------------- preset view
-// Until any field is mapped the banner explains it once; per-row tags only
-// appear when the map is partial, to point at what's still missing.
-const ANY_MAPPED = BLOCKS.some((b) => b.enabledIndex != null || b.typeIndex != null || b.params.some((p) => p.index != null));
-const unmapTag = (text = "unmapped") => (ANY_MAPPED ? `<span class="unmap">${text}</span>` : "");
-function paramRow(p: Param, slot: number | null): string {
-  const mapped = p.index != null && detail != null;
-  const raw = mapped ? detail!.params_i24[p.index!] : null;
-  const val = raw == null ? "—" : formatValue(p, raw);
-  const tag = p.index == null ? unmapTag() : "";
-  if (p.options) {
-    const opts = p.options.map((o, i) => `<option value="${i}" ${raw === i ? "selected" : ""}>${esc(o)}</option>`).join("");
-    return `<div class="prow ${mapped ? "" : "unmapped"}"><label>${esc(p.label)}${tag}</label><select class="sel" data-slot="${slot}" data-param="${p.index}" ${mapped ? "" : "disabled"}>${opts}</select><span class="val"></span></div>`;
+function paramRow(r: Row): string {
+  if (r.choices) {
+    const opts = r.choices.map((c, i) => `<option value="${r.lo + i}" ${r.lo + i === r.value ? "selected" : ""}>${esc(c)}</option>`).join("");
+    return `<div class="prow"><label>${esc(r.label)}</label><select class="sel" data-field="${r.field}" aria-label="${esc(r.label)}">${opts}</select><span class="val"></span></div>`;
   }
-  const min = Math.round(p.min / (p.scale ?? 1) * (p.scale ? 1 : 1));
-  return `<div class="prow ${mapped ? "" : "unmapped"}">
-    <label>${esc(p.label)}${tag}</label>
-    <input type="range" min="${p.min / (p.scale ?? 1)}" max="${p.max / (p.scale ?? 1)}" step="1" value="${raw ?? min}" data-slot="${slot}" data-param="${p.index}" ${mapped ? "" : "disabled"} aria-label="${esc(p.label)}">
-    <span class="val">${esc(val)}</span>
+  const out = r.value < r.lo || r.value > r.hi;
+  return `<div class="prow ${out ? "unmapped" : ""}">
+    <label>${esc(r.label)}</label>
+    <input type="range" min="${r.lo}" max="${r.hi}" step="1" value="${Math.min(r.hi, Math.max(r.lo, r.value))}" data-field="${r.field}" aria-label="${esc(r.label)}">
+    <span class="val">${esc(r.display)}</span>
   </div>`;
 }
-function tempoChips(): string {
-  return `<div class="prow"><label>Tempo${unmapTag()}</label><div class="chips">${TEMPO_DIVISIONS.map((d, i) => `<button class="chip ${i === 0 ? "on" : ""}" disabled>${esc(d)}</button>`).join("")}</div><span class="val"></span></div>`;
-}
-function blockCard(b: Block): string {
-  const on = blockOn(b);
-  const type = blockType(b);
+function blockCard(b: BlockView): string {
   const typeSel = b.types.length
-    ? `<select class="sel" data-type="${b.typeIndex}" ${b.typeIndex == null ? "disabled" : ""} aria-label="${esc(b.title)} type">${b.types.map((t, i) => `<option value="${i}" ${t === type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`
+    ? `<select class="sel" data-type="${b.key}" aria-label="${esc(b.label)} type">${b.types.map((t, i) => `<option value="${i}" ${i === b.type_index ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`
     : `<span style="margin-left:auto"></span>`;
-  return `<section class="card ${on === false ? "off" : ""} ${focusBlock === b.id ? "focus" : ""}" id="card-${b.id}" aria-label="${esc(b.title)}">
-    <div class="hd"><span class="ttl">${esc(b.title)}${b.enabledIndex == null ? unmapTag("on/off unmapped") : ""}</span>${typeSel}<button class="toggle ${on ? "on" : ""}" data-toggle="${b.enabledIndex}" ${b.enabledIndex == null ? "disabled" : ""} aria-label="${on ? "On" : "Off"}"></button></div>
-    <div class="bd">${b.params.every((p) => p.index == null)
-      ? `<div class="note">This block's parameters move with the effect type, so they aren't mapped yet. Type and on/off are.</div>`
-      : b.params.map((p) => paramRow(p, selected)).join("") + (b.tempo ? tempoChips() : "")}</div>
+  return `<section class="card ${b.on ? "" : "off"} ${focusBlock === b.key ? "focus" : ""}" id="card-${b.key}" aria-label="${esc(b.label)}">
+    <div class="hd"><span class="ttl">${esc(b.label)}</span>${typeSel}<button class="toggle ${b.on ? "on" : ""}" data-toggle="${b.key}" aria-label="${b.on ? "On" : "Off"}"></button></div>
+    <div class="bd">${b.rows.map(paramRow).join("")}</div>
   </section>`;
 }
-function routingCard(): string {
-  const loops = BLOCKS.filter((b) => b.id.startsWith("loop")).map((b) => {
-    const on = blockOn(b);
-    return `<div class="${on ? "on" : ""}"><div class="k">${esc(b.name)}</div><div class="v">${on === null ? "—" : on ? "On" : "Off"}</div></div>`;
-  }).join("");
-  const r = PRESET_MISC.routing;
-  const rawR = detail && r.index != null ? detail.params_i24[r.index] : null;
-  return `<section class="card" aria-label="Routing and loops">
-    <div class="hd"><span class="ttl">Routing · Loops · Gate</span>
-      <select class="sel" data-param="${r.index}" data-slot="${selected}" ${r.index == null ? "disabled" : ""} aria-label="Routing">${r.options.map((o, i) => `<option value="${i}" ${rawR === i ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></div>
+function routingCard(d: Detail): string {
+  const loops = d.chain.filter((c) => c.key.startsWith("loop") || c.key === "insert").map((c) =>
+    `<button class="${c.on ? "on" : ""}" data-toggle="${c.key}"><div class="k">${esc(c.name)}</div><div class="v">${c.on ? "On" : "Off"}</div></button>`).join("");
+  return `<section class="card" aria-label="Routing, loops and boost">
+    <div class="hd"><span class="ttl">Routing · Loops · Boost</span>
+      <select class="sel" data-routing aria-label="Routing">${d.routings.map((o, i) => `<option value="${i}" ${d.routing === i ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></div>
     <div class="bd">
-      <div class="loops4">${loops}</div>
-      ${PRESET_MISC.gate.map((p) => paramRow(p, selected)).join("")}
-      ${PRESET_MISC.tempo.map((p) => paramRow(p, selected)).join("")}
-      <div class="note">Changes are sent to the unit's edit buffer as you make them. Nothing is written to a bank slot until Store.</div>
+      <div class="loops4 five">${loops}</div>
+      <div class="prow"><label>Boost</label><button class="toggle ${d.boost ? "on" : ""}" data-toggle="boost" aria-label="Boost ${d.boost ? "on" : "off"}"></button><span class="val"></span></div>
+      <div class="prow"><label>Boost level</label><input type="range" min="0" max="10" step="1" value="${d.boost_level}" data-boost aria-label="Boost level"><span class="val">${d.boost_level} dB</span></div>
+      <div class="prow"><label>Tempo</label><input type="number" min="20" max="600" value="${d.bpm ?? ""}" data-bpm class="sel" aria-label="Tempo in BPM" style="width:90px"><span class="val">BPM</span></div>
+      <div class="note">Tempo sets every tap time; delay times and speeds with a note value follow it.</div>
     </div>
   </section>`;
 }
 function presetView(): string {
-  const s = selected != null ? bank.slots[selected] : null;
-  if (!s || !detail) return `<main class="body"><div class="centered"><div class="note">Pick a preset in Banks first.</div></div></main>`;
-  const tiles = BLOCKS.map((b) => {
-    const on = blockOn(b);
-    return `<button class="tile ${on ? "on" : ""} ${focusBlock === b.id ? "focus" : ""}" data-block="${b.id}"><span class="t">${esc(b.name)}<i></i></span><span class="s">${esc(blockType(b) || (on === null ? "—" : on ? "On" : "Off"))}</span></button>`;
-  }).join("");
-  const cards = BLOCKS.filter((b) => b.types.length || b.id === "eq").map(blockCard).join("") + routingCard();
+  const d = detail;
+  if (!d) return `<main class="body"><div class="centered"><div class="note">Pick a preset in Banks first.</div></div></main>`;
+  const tiles = d.chain.map((c) =>
+    `<button class="tile ${c.on ? "on" : ""} ${focusBlock === c.key ? "focus" : ""}" data-block="${c.key}"><span class="t">${esc(c.name)}<i></i></span><span class="s">${esc(c.summary)}</span></button>`).join("");
   return `
     <section class="chain" aria-label="Signal chain">${tiles}</section>
-    <div class="banner">Edits change this file only; sending them to the unit is disabled for now. Filter, Modulation, pitch voices, loops, insert and boost aren't mapped yet.</div>
-    <main class="cards">${cards}</main>`;
+    <div class="banner">Edits change this file only; sending them to the unit is disabled for now. Save a .syx to keep them.</div>
+    <main class="cards">${d.blocks.map(blockCard).join("")}${routingCard(d)}</main>`;
 }
 
 // ---------------------------------------------------------------- global view
@@ -456,38 +435,25 @@ function wire() {
     render();
     document.getElementById(`card-${focusBlock}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }));
-  document.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-param]").forEach((el) => {
-    const param = Number(el.dataset.param);
-    if (!Number.isFinite(param)) return;
-    const slot = Number(el.dataset.slot);
-    const write = async () => {
-      const value = Number(el.value);
-      await invoke("set_param", { index: slot, param, value });
-      if (detail) detail.params_i24[param] = value;
-      const val = el.parentElement?.querySelector<HTMLElement>(".val");
-      const p = findParam(param);
-      if (val && p) val.textContent = formatValue(p, value);
-      bank.dirty = [...new Set([...bank.dirty, slot])];
-    };
-    el.oninput = () => { const val = el.parentElement?.querySelector<HTMLElement>(".val"); const p = findParam(param); if (val && p) val.textContent = formatValue(p, Number(el.value)); };
-    el.onchange = write;
+  const edit = async (e: Edit) => {
+    if (selected == null) return;
+    try {
+      detail = await invoke<Detail>("edit_preset", { index: selected, edit: e });
+      bank.dirty = [...new Set([...bank.dirty, selected])];
+      render();
+    } catch (err) {
+      setStatus(String(err), true);
+    }
+  };
+  document.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-field]").forEach((el) => {
+    const field = Number(el.dataset.field);
+    el.onchange = () => edit({ kind: "field", field, value: Number(el.value) });
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-toggle]").forEach((b) => (b.onclick = async () => {
-    const param = Number(b.dataset.toggle);
-    if (!Number.isFinite(param) || selected == null || !detail) return;
-    const value = detail.params_i24[param] ? 0 : 1;
-    await invoke("set_param", { index: selected, param, value });
-    await refresh();
-  }));
-  document.querySelectorAll<HTMLSelectElement>("[data-type]").forEach((el) => (el.onchange = async () => {
-    const param = Number(el.dataset.type);
-    if (!Number.isFinite(param) || selected == null) return;
-    await invoke("set_param", { index: selected, param, value: Number(el.value) });
-    await refresh();
-  }));
-}
-function findParam(index: number): Param | undefined {
-  return [...BLOCKS.flatMap((b) => b.params), ...PRESET_MISC.gate, ...PRESET_MISC.tempo].find((p) => p.index === index);
+  document.querySelectorAll<HTMLSelectElement>("[data-type]").forEach((el) => (el.onchange = () => edit({ kind: "type", block: el.dataset.type!, value: Number(el.value) })));
+  document.querySelectorAll<HTMLButtonElement>("[data-toggle]").forEach((b) => (b.onclick = () => edit({ kind: "toggle", key: b.dataset.toggle! })));
+  document.querySelectorAll<HTMLSelectElement>("[data-routing]").forEach((el) => (el.onchange = () => edit({ kind: "routing", value: Number(el.value) })));
+  document.querySelectorAll<HTMLInputElement>("[data-boost]").forEach((el) => (el.onchange = () => edit({ kind: "boost_level", value: Number(el.value) })));
+  document.querySelectorAll<HTMLInputElement>("[data-bpm]").forEach((el) => (el.onchange = () => edit({ kind: "bpm", value: Number(el.value) })));
 }
 function startRename(i: number, cell: HTMLElement) {
   const slot = bank.slots[i];

@@ -17,7 +17,8 @@ fn usage() -> ! {
 File commands (offline):
   gsys list <file.SQS|file.syx>            list preset slots and names
   gsys export <in.SQS> <out.syx>            write occupied slots as a .syx dump
-  gsys json <file.SQS|file.syx>             dump presets as JSON (name + int24 params)
+  gsys show <file> <slot>                   decode one preset: every block, type and parameter
+  gsys json <file.SQS|file.syx>             dump presets as JSON (raw fields + decoded view)
   gsys scripts <file.Prs|.Ebf|.SQS>         show SysEx the editor's TRAN/RECV scripts send/expect
   gsys rename <in.syx> <slot> \"<name>\" <out.syx>
 
@@ -79,6 +80,15 @@ fn main() {
             std::fs::write(a(2), syx::save_bank(&bank, 0)).expect("write");
             println!("wrote {} presets to {}", bank.occupied(), a(2));
         }
+        "show" => {
+            let bank = load_any(Path::new(a(1)));
+            let slot: usize = a(2).parse().unwrap_or_else(|_| usage());
+            let p = bank.get(slot).unwrap_or_else(|| {
+                eprintln!("slot {slot} is empty");
+                std::process::exit(1)
+            });
+            print_preset(slot, p);
+        }
         "json" => {
             let bank = load_any(Path::new(a(1)));
             let rows: Vec<_> = bank
@@ -90,6 +100,7 @@ fn main() {
                     serde_json::json!({
                         "slot": i, "label": slot_label(i), "name": p.name(),
                         "params_i24": p.params_i24(), "raw_hex": hex(&p.raw),
+                        "view": gsystem_protocol::view::preset_view(i, p),
                     })
                 })
                 .collect();
@@ -219,6 +230,54 @@ fn main() {
             midi::send_raw(a(1), &bytes);
         }
         _ => usage(),
+    }
+}
+
+fn print_preset(slot: usize, p: &gsystem_protocol::Preset) {
+    use gsystem_protocol::{levels, params, tempo};
+    println!("{}  {}", slot_label(slot), p.name());
+    let l = levels::preset_levels(p);
+    let loops: Vec<String> = (0..4)
+        .filter(|&i| l.loops[i])
+        .map(|i| format!("{}", i + 1))
+        .collect();
+    println!(
+        "  routing {} · loops {} · insert {} · boost {}{}",
+        levels::ROUTINGS[l.routing],
+        if loops.is_empty() {
+            "off".into()
+        } else {
+            loops.join(",")
+        },
+        if l.insert { "on" } else { "off" },
+        if l.boost { "on" } else { "off" },
+        format!(" ({} dB)", l.boost_level),
+    );
+    if let Some(ms) = tempo::preset_tempo_ms(p) {
+        println!("  tempo {} BPM ({ms} ms)", tempo::ms_to_bpm(ms));
+    }
+    for b in params::BLOCKS.iter() {
+        let ty = b
+            .effect_type(p)
+            .map(|t| format!(" — {}", t.name))
+            .unwrap_or_default();
+        println!(
+            "\n  {}{} [{}]",
+            b.label.to_uppercase(),
+            ty,
+            if b.is_on(p) { "ON" } else { "off" }
+        );
+        let en = b.enable_field(p);
+        for (f, fp) in b.stored_fields(p) {
+            if Some(f) == en || matches!(fp, params::FieldParam::Type(_)) {
+                continue;
+            }
+            println!(
+                "    {:<14} {:>12}   (field {f})",
+                params::label(fp.name()),
+                fp.format(p.param_i24(f))
+            );
+        }
     }
 }
 

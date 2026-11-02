@@ -4,9 +4,8 @@
 //! - bytes 0..20   name (20 chars max, NUL-terminated; leftover bytes after
 //!                 the NUL are not cleared by the editor), byte 20 is always 0
 //! - bytes 21..516 165 fields, each a little-endian signed 24-bit integer.
-//!   Fields 3..125 hold eight effect blocks in fixed slots (see [`BLOCKS`]),
-//!   each stored as `[count][type][on/off][params…]`, padded with -1.
-//!   Fields 125..165 hold byte-packed levels/routing data (not decoded yet).
+//!   See [`crate::params`] for the block layout and [`crate::levels`] for
+//!   the packed loops/boost/routing field.
 
 use crate::sysex::{slot_to_number, Message, PRESET_BYTES};
 
@@ -91,99 +90,7 @@ impl Preset {
             data: self.raw.clone(),
         }
     }
-
-    /// (type, on) of an effect block, if the slot looks valid.
-    pub fn block_state(&self, b: &Block) -> Option<(i32, bool)> {
-        let n = self.param_i24(b.start);
-        (n > 0).then(|| {
-            (
-                self.param_i24(b.type_field()),
-                self.param_i24(b.on_field()) != 0,
-            )
-        })
-    }
 }
-
-/// An effect block's fixed slot in the field array. Derived from the 100
-/// factory presets and checked against every value Vyzor displays for
-/// "Scotty's Blues" (see PROTOCOL.md). Order is the firmware's storage
-/// order, not the audio order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Block {
-    pub id: &'static str,
-    /// Field index of the block's parameter count.
-    pub start: usize,
-    /// Number of fields in the slot (count field included).
-    pub len: usize,
-    /// Whether field `start+1` is a type selector. Gate and EQ have none.
-    pub has_type: bool,
-}
-
-impl Block {
-    /// Field holding the effect type (meaningless when `!has_type`).
-    pub fn type_field(&self) -> usize {
-        self.start + 1
-    }
-    /// Field holding on/off. Gate: first param. EQ: last param.
-    pub fn on_field(&self) -> usize {
-        match self.id {
-            "gate" => self.start + 1,
-            "eq" => self.start + 10,
-            _ => self.start + 2,
-        }
-    }
-}
-
-pub const BLOCKS: [Block; 8] = [
-    Block {
-        id: "comp",
-        start: 3,
-        len: 10,
-        has_type: true,
-    },
-    Block {
-        id: "filter",
-        start: 13,
-        len: 16,
-        has_type: true,
-    },
-    Block {
-        id: "mod",
-        start: 29,
-        len: 15,
-        has_type: true,
-    },
-    Block {
-        id: "pitch",
-        start: 44,
-        len: 20,
-        has_type: true,
-    },
-    Block {
-        id: "reverb",
-        start: 64,
-        len: 16,
-        has_type: true,
-    },
-    Block {
-        id: "gate",
-        start: 80,
-        len: 6,
-        has_type: false,
-    },
-    Block {
-        id: "delay",
-        start: 86,
-        len: 28,
-        has_type: true,
-    },
-    Block {
-        id: "eq",
-        start: 114,
-        len: 11,
-        has_type: false,
-    },
-];
 
 /// "BB-P" label the editor and unit use for slot `index` (0-based).
 pub fn slot_label(index: usize) -> String {

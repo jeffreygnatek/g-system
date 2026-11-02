@@ -165,6 +165,32 @@ fn insert_slot(from: usize, to: usize, state: State<AppState>) -> BankView {
     get_bank(state)
 }
 
+// ---- Preset decoding / editing (gsystem_protocol::view) ----
+
+use gsystem_protocol::view::{self, Edit, PresetView};
+
+#[tauri::command]
+fn preset_view(index: usize, state: State<AppState>) -> Result<PresetView, String> {
+    let bank = state.bank.lock().unwrap();
+    let p = bank.get(index).ok_or("empty slot")?;
+    Ok(view::preset_view(index, p))
+}
+
+#[tauri::command]
+fn edit_preset(index: usize, edit: Edit, state: State<AppState>) -> Result<PresetView, String> {
+    let mut bank = state.bank.lock().unwrap();
+    let p = bank
+        .slots
+        .get_mut(index)
+        .and_then(|s| s.as_mut())
+        .ok_or("empty slot")?;
+    view::apply(p, edit)?;
+    let v = view::preset_view(index, p);
+    drop(bank);
+    state.dirty.lock().unwrap().insert(index);
+    Ok(v)
+}
+
 // ---- MIDI -----------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -326,6 +352,8 @@ pub fn run() {
             insert_slot,
             set_param,
             slot_detail,
+            preset_view,
+            edit_preset,
             midi_ports,
             midi_identify,
             midi_backup,
