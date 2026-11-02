@@ -562,9 +562,17 @@ pub fn resolve_value(fp: &FieldParam, v: &SpecValue) -> Result<(i32, Option<Stri
             Ok((c, (!notes.is_empty()).then(|| notes.join("; "))))
         }
         SpecValue::Text(s) => {
-            let q = norm(s);
+            // Labels hold digits and dots ("1.0 ms", "1/8D"): only case and
+            // spaces are ignored here.
+            let loose = |x: &str| -> String {
+                x.chars()
+                    .filter(|c| !c.is_whitespace())
+                    .flat_map(char::to_lowercase)
+                    .collect()
+            };
+            let q = loose(s);
             if let Some(c) = &choices {
-                if let Some(i) = c.iter().position(|l| norm(l) == q) {
+                if let Some(i) = c.iter().position(|l| loose(l) == q) {
                     return Ok((lo + i as i32, None));
                 }
                 // On/Off switches also take true/false, yes/no.
@@ -657,9 +665,15 @@ fn find_type(b: &'static Block, name: &str) -> Result<usize, String> {
 /// from a spec hides behind a short count.
 fn complete_block(p: &mut Preset, b: &'static Block) {
     let fields = b.fields(p);
+    let stored = p.param_i24(b.count_field).max(0) as usize;
     p.set_param_i24(b.count_field, fields.len() as i32);
-    for (f, fp) in fields {
-        let v = p.param_i24(f);
+    for (i, (f, fp)) in fields.into_iter().enumerate() {
+        let mut v = p.param_i24(f);
+        // Padding past the old count is -1; start such a field at 0 instead
+        // ("-1 %" feedback is padding, not a choice).
+        if i >= stored && v == crate::validate::PADDING {
+            v = 0;
+        }
         p.set_param_i24(f, fp.clamp(v));
     }
 }
@@ -1037,11 +1051,19 @@ fn apply_modifier(q: &mut Preset, m: &ModifierSpec) -> Result<Applied, String> {
             Some(v) => Err(format!("modifier {what} {v} is outside 0..100 %")),
         }
     };
+    let min = pct(m.min, old.min, "min")?;
+    let max = pct(m.max, old.max, "max")?;
+    // Without a mid, a new min or max puts it halfway (a linear pedal).
+    let mid_default = if m.min.is_some() || m.max.is_some() {
+        ((min as u16 + max as u16) / 2) as u8
+    } else {
+        old.mid
+    };
     let new = Modifier {
         source,
-        min: pct(m.min, old.min, "min")?,
-        mid: pct(m.mid, old.mid, "mid")?,
-        max: pct(m.max, old.max, "max")?,
+        min,
+        mid: pct(m.mid, mid_default, "mid")?,
+        max,
     };
     let new = if source == 0 {
         modifiers::UNASSIGNED
@@ -1386,10 +1408,10 @@ mod tests {
         assert!(!comp.on && comp.params.is_none());
         assert_eq!(d.modifiers.len(), 1);
         assert_eq!(d.modifiers[0].param, "Mix");
-        assert!(
-            d.modifiers[0].value.starts_with("Exp: 0 % / "),
-            "{:?}",
-            d.modifiers
+        // Mid defaults to halfway between the given min and max.
+        assert_eq!(
+            d.modifiers[0].value,
+            "Exp: 0 % / 30 % / 60 % (0 / 30 / 60 %)"
         );
         // The report shows what was set, with the nearest-step note for 4 kHz.
         let fb = applied.iter().find(|a| a.target == "delay.Fbhcut").unwrap();
@@ -1453,6 +1475,11 @@ mod tests {
             param("comp", &p, "Attack").format(r("comp", "Attack", "1 ms").0),
             "1.0 ms"
         );
+        // "10 ms" is not the label "1.0 ms".
+        let attack = param("comp", &p, "Attack");
+        assert_eq!(attack.format(r("comp", "Attack", "10 ms").0), "10 ms");
+        let release = param("comp", &p, "Release");
+        assert_eq!(release.format(r("comp", "Release", "300 ms").0), "300 ms");
         // Switches.
         assert_eq!(
             resolve_value(&param("comp", &p, "Comp"), &true.into())
