@@ -17,7 +17,11 @@ load from `.SQS`/`.syx` files and from the unit over MIDI (see
 USB-MIDI interface**; the unit's own USB port works on Linux). Every effect block,
 type and parameter is decoded and editable, along with routing, loops, insert,
 boost, tempo, modifier (pedal/encoder) assignments and the NovaDrive preset.
-Global settings and footswitch assignments are read from the unit.
+Global settings and footswitch assignments are read from the unit. The unit's
+100 factory presets are built in, so you can browse and audition them and copy
+them into your own banks. An MCP server lets an AI agent such as Claude design
+presets for you, and a site for sharing presets,
+[G-System Presets](https://gsystempresets.com), is coming soon.
 
 To hear a preset, *Audition* loads it into the unit's edit buffer, and *Live*
 mode sends every edit there as you make it. To keep it, press **STORE** on the
@@ -45,6 +49,14 @@ signal path. Light and dark follow your OS; the header button switches them.
 inspector for the selected preset. Amber dots mark slots that differ from the unit.
 
 ![Banks view](docs/screenshots/banks.png)
+
+**Factory**: the 100 presets built into the G-System, labelled A0-1 to B9-5
+as the unit's display shows them. Click one to see its signal chain,
+*Audition* it on the unit (it follows *Live* mode too), or copy it into the
+first empty user slot or the one you have selected, to edit it. The factory
+bank itself is read-only.
+
+![Factory view](docs/screenshots/factory.png)
 
 **Preset**: the signal flow as the unit actually wires it. The digital
 blocks before the amp come first, then the four analog loops, then the insert
@@ -85,6 +97,19 @@ editor draws Gate first and EQ last. Corrections welcome.
 
 Screenshots are generated from the real frontend with the factory set loaded;
 see `tools/screenshots`.
+
+## Sharing presets online (coming soon)
+
+[**G-System Presets**](https://gsystempresets.com) is a companion web service
+for sharing presets, replacing the TC Preset Vault the old editor linked to.
+Upload a `.syx`, `.SQS` or `.Prs`, browse and search what other players have
+shared, and download what you like. It has accounts and profiles (sign in with
+an email link, Google or GitHub), lets you follow other players, and shows who
+uploaded what. Every upload is decoded and checked with this repo's
+`gsystem-protocol` crate; duplicates of the same sound and TC's own factory
+presets are turned away. The source is in
+[jeffreygnatek/g-system-online](https://github.com/jeffreygnatek/g-system-online).
+It isn't live yet.
 
 ## Installing
 
@@ -136,11 +161,15 @@ gsys backup  <port> <out.syx> [from] [to]
 gsys audition <port> <file> <slot>   load into the unit's edit buffer (press STORE on the unit to keep)
 gsys raw     <port> "F0 7E 7F 06 01 F7"
 gsys store   <port> <file.syx> <file-slot> <unit-slot> --sysex-id <n> --i-accept-the-risk
+gsys merge <out.syx> <files…>    combine presets from several files, dropping duplicates
+gsys usb-info                    the unit's USB descriptors (direct USB troubleshooting)
 gsys mcp --bank <file.syx> [--port <port>] [--read-only]   MCP server for AI agents (below)
 ```
 
 Port names match by substring (`gsys ports` lists them; usually "G-System").
-Slots are 0-based user slots: 0 = 00-1 … 199 = 39-5. `store` can freeze the
+Slots are 0-based user slots: 0 = 00-1 … 199 = 39-5. A slot that was never
+written reads as empty (the unit answers "damaged" for those; storing a
+preset there on the unit fills it). `store` can freeze the
 unit, so back up with `backup` first.
 
 ## Design presets with an AI agent (MCP)
@@ -156,6 +185,10 @@ Tools: `get_catalog`, `list_presets`, `get_preset`, `create_preset`,
 `update_preset`, `copy_preset`, `rename_preset`, `clear_slot`,
 `validate_preset`, `find_empty_slot`, and `audition` when a MIDI port is
 given. There is also a `design_preset` prompt with guidance for the agent.
+
+For example, from the brief "basic patches for a four-channel amp switched over
+MIDI (a Diezel VH4)", an agent wrote one patch per channel plus variations, and
+a copy of each with the Insert on for the four-cable method in banks 20–21.
 
 **Safety model.** The agent never stores anything on the unit. Changes go to
 the bank file (written atomically after each change; the first change of a

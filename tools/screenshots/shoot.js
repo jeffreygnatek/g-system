@@ -48,6 +48,10 @@ const server = http.createServer((req, res) => {
             if (args.edit.kind === "routing") v.routing = args.edit.value;
             return v;
           }
+          case "factory_bank": return Array.from({ length: 100 }, (_, i) => ({
+            index: i, label: `${i < 50 ? "A" : "B"}${Math.floor(i / 5) % 10}-${(i % 5) + 1}`,
+            name: factory.find((x) => x.slot === i)?.name ?? null }));
+          case "factory_view": return factory.find((x) => x.slot === args.index).view;
           case "midi_ports": return { inputs: ["G-System"], outputs: ["G-System"] };
           case "midi_identify": return "01 00 04 02";
           case "midi_backup": bank = loaded; return { received: factory.map((p) => p.slot), damaged: [] };
@@ -88,6 +92,13 @@ const server = http.createServer((req, res) => {
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(OUT, "banks-light.png") });
   await page.emulateMedia({ colorScheme: "dark" });
+
+  await page.click('[data-view="factory"]');
+  await page.waitForSelector('.cell[data-f="3"]');
+  await page.click('.cell[data-f="3"]');
+  await page.mouse.move(5, 5);
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(OUT, "factory.png") });
 
   await page.click('[data-view="global"]');
   await page.waitForTimeout(400);
