@@ -202,7 +202,7 @@ impl Session {
         self.drain();
         self.send(&Message::preset_request(0, slot).encode());
         let want = gsystem_protocol::sysex::slot_to_number(slot);
-        let got = self.wait(REQUEST_TIMEOUT, |b| match Message::parse(b) {
+        let got = self.wait(REQUEST_TIMEOUT, |b| match Message::parse_lenient(b) {
             Ok(Message::PresetDump { number, data, .. }) if number == want => {
                 Some(Ok(Preset::from_raw(data)))
             }

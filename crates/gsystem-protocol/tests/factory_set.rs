@@ -245,3 +245,16 @@ fn ebf_edit_buffer_decodes_the_shorter_layout() {
     assert_eq!(gsystem_protocol::novadrive::nova_preset(&p), 0);
     assert!(gsystem_protocol::validate::check(&p).is_ok());
 }
+
+#[test]
+fn lenient_parse_keeps_unit_dumps_with_a_bad_checksum() {
+    let bank = vyzor::load_bank(&factory()).unwrap();
+    let mut bytes = bank.get(0).unwrap().to_message(0, 0).encode();
+    let n = bytes.len();
+    bytes[n - 2] ^= 0x01; // corrupt the checksum only
+    assert!(Message::parse(&bytes).is_err());
+    match Message::parse_lenient(&bytes) {
+        Ok(Message::PresetDump { data, .. }) => assert_eq!(data, bank.get(0).unwrap().raw),
+        other => panic!("{other:?}"),
+    }
+}

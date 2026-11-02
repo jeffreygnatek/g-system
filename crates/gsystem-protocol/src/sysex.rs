@@ -190,7 +190,22 @@ pub enum Message {
 
 impl Message {
     /// Parse one complete framed message (F0 ... F7).
+    /// Parse one framed message, rejecting preset dumps whose checksum
+    /// doesn't match (files, where a mismatch means damage).
     pub fn parse(bytes: &[u8]) -> Result<Message, SysexError> {
+        Message::parse_with(bytes, false)
+    }
+
+    /// Like [`parse`](Self::parse), but keeps preset dumps whose checksum
+    /// doesn't match. Use for dumps **from the unit**: davidavalanches/
+    /// gsystem-editor, tested on real units, reads them non-strictly, and
+    /// Vyzor's own `.Prs` files often carry stale checksums. Check the values
+    /// with `validate::check` instead.
+    pub fn parse_lenient(bytes: &[u8]) -> Result<Message, SysexError> {
+        Message::parse_with(bytes, true)
+    }
+
+    fn parse_with(bytes: &[u8], lenient: bool) -> Result<Message, SysexError> {
         if bytes.len() < 8 {
             return Err(SysexError::TooShort);
         }
@@ -211,7 +226,7 @@ impl Message {
                 let nibbles = &p[3..3 + PRESET_NIBBLES];
                 let chk = p[3 + PRESET_NIBBLES];
                 let calc = nibble_checksum(nibbles);
-                if chk != calc {
+                if chk != calc && !lenient {
                     return Err(SysexError::BadChecksum {
                         expected: calc,
                         found: chk,

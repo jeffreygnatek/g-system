@@ -531,6 +531,9 @@ async fn midi_backup(
         let to = to.min(199);
         let total = to + 1 - from;
         let mut got = Vec::new();
+        // For a useful error when nothing usable comes back.
+        let mut heard = 0usize;
+        let mut first_heard: Option<Vec<u8>> = None;
         for (n, slot) in (from..=to).enumerate() {
             if state.cancel.load(Ordering::SeqCst) {
                 break;
@@ -541,11 +544,17 @@ async fn midi_backup(
                 .map_err(|e| e.to_string())?;
             let want = gsystem_protocol::sysex::slot_to_number(slot);
             // A stored preset answers in ~0.77 s.
-            let p = m.wait(Duration::from_millis(1100), |b| match Message::parse(b) {
-                Ok(Message::PresetDump { number, data, .. }) if number == want => {
-                    Preset::from_raw(data)
+            let p = m.wait(Duration::from_millis(1100), |b| {
+                heard += 1;
+                if first_heard.is_none() {
+                    first_heard = Some(b.to_vec());
                 }
-                _ => None,
+                match Message::parse_lenient(b) {
+                    Ok(Message::PresetDump { number, data, .. }) if number == want => {
+                        Preset::from_raw(data)
+                    }
+                    _ => None,
+                }
             });
             if let Some(p) = p {
                 state.bank.lock().unwrap().set(slot, p);
@@ -561,6 +570,14 @@ async fn midi_backup(
                     found: got.len(),
                 },
             );
+        }
+        if got.is_empty() && heard > 0 {
+            let first = first_heard.unwrap_or_default();
+            return Err(format!(
+                "The unit sent {heard} message(s) but no preset dumps were recognised. First one ({} bytes): {}",
+                first.len(),
+                first.iter().take(24).map(|x| format!("{x:02X}")).collect::<Vec<_>>().join(" ")
+            ));
         }
         Ok(got)
     })
