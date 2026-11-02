@@ -35,6 +35,7 @@ const server = http.createServer((req, res) => {
     const empty = { path: null, occupied: 0, dirty: [], slots: slots.map((s) => ({ ...s, name: null })) };
     const loaded = { path: "/Users/jeff/G-System/Factory_Set.SQS", occupied: factory.length, dirty: [32, 61], slots };
     let bank = empty;
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     window.__TAURI_INTERNALS__ = {
       transformCallback: () => 0,
       invoke: async (cmd, args) => {

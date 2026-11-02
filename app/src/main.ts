@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 type Slot = { index: number; label: string; name: string | null };
@@ -48,7 +49,11 @@ let focusBlock: string | null = null;
 let globals: GlobalsView | null = null;
 let globalsBusy = false;
 let live = false;
-let pedalSlot: number | null = null; // modifier shown in the pedal panel
+let pedalSlot: number | null = null;
+// A bank read in progress (the unit answers about one preset per second).
+type Reading = { done: number; total: number; found: number };
+let reading: Reading | null = null;
+let identifying = false; // modifier shown in the pedal panel
 // Light / dark: follows the OS until the user picks one (remembered on this machine).
 type Mode = "auto" | "light" | "dark";
 let mode: Mode = "auto";
@@ -161,6 +166,9 @@ async function loadPorts() {
   render();
 }
 async function identify(): Promise<boolean> {
+  identifying = true;
+  setStatus("");
+  render();
   try {
     const v = await invoke<string>("midi_identify", { input: portIn, output: portOut });
     unit = { connected: true, version: v };
@@ -169,20 +177,46 @@ async function identify(): Promise<boolean> {
     unit = { connected: false };
     setStatus(String(e), true);
     return false;
+  } finally {
+    identifying = false;
   }
 }
+function progressText(r: Reading): string {
+  const left = Math.ceil(((r.total - r.done) * 1.0) / 60);
+  return `Reading slot ${r.done} of ${r.total} · ${r.found} preset${r.found === 1 ? "" : "s"} found${r.done < r.total ? ` · about ${left} min left` : ""}`;
+}
+function progressBar(r: Reading): string {
+  return `<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="${r.total}" aria-valuenow="${r.done}"><div style="width:${(r.done / r.total) * 100}%"></div></div>`;
+}
+/** Update the progress line and bar in place (a full render would reset scrolling). */
+function showProgress() {
+  if (!reading) return;
+  document.querySelectorAll<HTMLElement>("[data-progress]").forEach((el) => (el.textContent = progressText(reading!)));
+  document.querySelectorAll<HTMLElement>(".bar > div").forEach((el) => (el.style.width = `${(reading!.done / reading!.total) * 100}%`));
+}
 async function midiBackup(from: number, to: number) {
-  const n = to - from + 1;
-  unit.progress = `Reading ${n} slot${n === 1 ? "" : "s"} (about ${Math.ceil((n * 0.8) / 60)} min)…`;
+  reading = { done: 0, total: to - from + 1, found: 0 };
+  unit.progress = "reading";
   render();
+  const stop = await listen<Reading>("backup-progress", (e) => {
+    reading = e.payload;
+    showProgress();
+  });
   try {
     const got = await invoke<number[]>("midi_backup", { input: portIn, output: portOut, from, to });
+    const stopped = reading && reading.done < reading.total;
     unit = { ...unit, connected: true, progress: undefined };
     await refresh();
-    setStatus(got.length ? `Received ${got.length} presets` : "No response from unit", !got.length);
+    setStatus(
+      got.length ? `${stopped ? "Stopped. " : ""}Received ${got.length} preset${got.length === 1 ? "" : "s"}` : stopped ? "Stopped." : "No presets answered. Empty slots don't answer.",
+      !got.length && !stopped,
+    );
   } catch (e) {
     unit = { connected: false };
     setStatus(String(e), true);
+  } finally {
+    stop();
+    reading = null;
   }
   render();
 }
@@ -304,7 +338,7 @@ function banksView(): string {
         <div class="seg"><button class="${half === 0 ? "on" : ""}" data-half="0">Banks 00–19</button><button class="${half === 1 ? "on" : ""}" data-half="1">Banks 20–39</button></div>
         <span class="dim">${defined} of 200 defined</span>
         <div class="right">
-          <button class="btn sm" id="getall" ${unit.connected ? "" : "disabled"}>Read all from unit</button>
+          ${reading ? `<span class="dim" data-progress>${progressText(reading)}</span><button class="btn sm" id="stopread">Stop</button>` : `<button class="btn sm" id="getall" ${unit.connected ? "" : "disabled"}>Read all from unit</button>`}
           <button class="btn sm amber" id="syncdirty" disabled title="${WRITE_DISABLED}">Sync ${bank.dirty.length || ""} changed →</button>
         </div>
       </div>
@@ -603,11 +637,12 @@ function connectView(): string {
       </div>
       <div style="display:flex;flex-direction:column;gap:10px">
         <div class="step ${ports.inputs.length ? "ok" : ""}"><span class="ic">${ports.inputs.length ? "✓" : "1"}</span><span>MIDI ports found</span><span class="r">${ports.inputs.length ? esc(portIn) : "none"}</span></div>
-        <div class="step ${unit.version ? "ok" : ""}"><span class="ic">${unit.version ? "✓" : "2"}</span><span>${unit.version ? "G-System answered" : "Identify the unit"}</span><span class="r">${unit.version ? esc(unit.version) : ""}</span></div>
-        <div class="step ${busy ? "busy" : unit.connected && bank.occupied ? "ok" : ""}"><span class="ic">${busy ? "" : unit.connected && bank.occupied ? "✓" : "3"}</span><span>${busy ? esc(busy) : "Read the 200 user presets"}</span><span class="r">${!busy && unit.connected && bank.occupied ? `${bank.occupied} presets` : ""}</span></div>
+        <div class="step ${identifying ? "busy" : unit.version ? "ok" : ""}"><span class="ic">${identifying ? "" : unit.version ? "✓" : "2"}</span><span>${identifying ? "Asking the unit…" : unit.version ? "G-System answered" : "Identify the unit"}</span><span class="r">${unit.version ? esc(unit.version) : ""}</span></div>
+        <div class="step ${busy ? "busy" : unit.connected && bank.occupied ? "ok" : ""}"><span class="ic">${busy ? "" : unit.connected && bank.occupied ? "✓" : "3"}</span><span data-progress>${reading ? progressText(reading) : "Read the 200 user presets"}</span><span class="r">${!busy && unit.connected && bank.occupied ? `${bank.occupied} presets` : ""}</span></div>
+        ${reading ? progressBar(reading) : ""}
       </div>
       <div class="rowbtns">
-        <button class="btn primary" id="connect" ${ports.inputs.length && !busy ? "" : "disabled"}>${busy ? "Reading…" : "Connect & read user bank"}</button>
+        ${busy ? `<button class="btn" id="stopread">Stop</button>` : `<button class="btn primary" id="connect" ${ports.inputs.length && !identifying ? "" : "disabled"}>${identifying ? "Connecting…" : "Connect & read user bank"}</button>`}
         <button class="btn" id="rescan">Rescan ports</button>
         <a href="#" id="offline">Work offline with a file instead</a>
       </div>
@@ -646,6 +681,7 @@ function wire() {
   on("toconnect", () => go("connect"));
   on("offline", () => (bank.occupied ? go("banks") : doOpen()));
   on("rescan", loadPorts);
+  on("stopread", () => invoke("midi_cancel"));
   on("connect", async () => { if (await identify()) { await midiBackup(0, 199); go("banks"); } else render(); });
   const pin = document.getElementById("pin") as HTMLSelectElement | null;
   const pout = document.getElementById("pout") as HTMLSelectElement | null;

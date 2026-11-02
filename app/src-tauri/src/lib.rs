@@ -1,14 +1,26 @@
 //! Tauri backend: holds the open bank in memory and exposes commands to the UI.
 //! All protocol work is delegated to `gsystem-protocol`; MIDI goes through
-//! `midir`. Nothing here has been run against hardware yet.
+//! `midir`. MIDI commands are async and do their work on a blocking thread,
+//! so the window stays responsive while the unit answers (about a second per
+//! preset when reading a bank).
 
 use gsystem_protocol::preset::{slot_label, Preset};
 use gsystem_protocol::sysex::Message;
 use gsystem_protocol::{syx, vyzor, Bank};
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
+
+/// Run blocking MIDI work off the main thread.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())?
+}
 
 #[derive(Default)]
 struct AppState {
@@ -18,6 +30,8 @@ struct AppState {
     dirty: Mutex<std::collections::BTreeSet<usize>>,
     /// Open while Live mode is on: edits go straight to the unit's edit buffer.
     live: Mutex<Option<Midi>>,
+    /// Set by `midi_cancel` to stop a bank read between slots.
+    cancel: AtomicBool,
 }
 
 #[derive(Serialize)]
@@ -299,11 +313,19 @@ fn send_all(m: &mut Midi, msgs: &[Message]) -> Result<(), String> {
 /// Load a preset into the unit's edit buffer so it can be heard. Nothing is
 /// stored; the user keeps it with the unit's own Store button.
 #[tauri::command]
-fn midi_audition(
+async fn midi_audition(
     index: usize,
     input: String,
     output: String,
-    state: State<AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    blocking(move || audition_blocking(index, &input, &output, &app.state::<AppState>())).await
+}
+fn audition_blocking(
+    index: usize,
+    input: &str,
+    output: &str,
+    state: &AppState,
 ) -> Result<String, String> {
     let p = state
         .bank
@@ -316,26 +338,35 @@ fn midi_audition(
     let mut live = state.live.lock().unwrap();
     match live.as_mut() {
         Some(m) => send_all(m, &msgs)?,
-        None => send_all(&mut Midi::open(&input, &output)?, &msgs)?,
+        None => send_all(&mut Midi::open(input, output)?, &msgs)?,
     }
     Ok(p.name())
 }
 
 /// Turn Live mode on (loading `index` into the edit buffer) or off.
 #[tauri::command]
-fn midi_live(
+async fn midi_live(
     on: bool,
     index: Option<usize>,
     input: String,
     output: String,
-    state: State<AppState>,
+    app: AppHandle,
+) -> Result<bool, String> {
+    blocking(move || live_blocking(on, index, &input, &output, &app.state::<AppState>())).await
+}
+fn live_blocking(
+    on: bool,
+    index: Option<usize>,
+    input: &str,
+    output: &str,
+    state: &AppState,
 ) -> Result<bool, String> {
     let mut live = state.live.lock().unwrap();
     if !on {
         *live = None;
         return Ok(false);
     }
-    let mut m = Midi::open(&input, &output)?;
+    let mut m = Midi::open(input, output)?;
     if let Some(i) = index {
         if let Some(p) = state.bank.lock().unwrap().get(i) {
             send_all(&mut m, &gsystem_protocol::live::full_push(p))?;
@@ -348,8 +379,11 @@ fn midi_live(
 /// Read the unit's global settings and footswitch assignments (55 47
 /// requests, read-only).
 #[tauri::command]
-fn midi_globals(input: String, output: String) -> Result<view::GlobalsView, String> {
-    let mut m = Midi::open(&input, &output)?;
+async fn midi_globals(input: String, output: String) -> Result<view::GlobalsView, String> {
+    blocking(move || globals_blocking(&input, &output)).await
+}
+fn globals_blocking(input: &str, output: &str) -> Result<view::GlobalsView, String> {
+    let mut m = Midi::open(input, output)?;
     let mut read = std::collections::HashMap::new();
     for (block, first, count) in gsystem_protocol::globals::GLOBAL_RANGES {
         while m.rx.try_recv().is_ok() {}
@@ -390,52 +424,107 @@ fn midi_globals(input: String, output: String) -> Result<view::GlobalsView, Stri
     Ok(view::globals_view(&read))
 }
 
-/// Ask the unit to identify itself (Universal Device Inquiry).
+/// Ask the unit to identify itself (Universal Device Inquiry). If something
+/// answers but not as a G-System, the error says what came back.
 #[tauri::command]
-fn midi_identify(input: String, output: String) -> Result<String, String> {
-    let mut m = Midi::open(&input, &output)?;
-    m.out
-        .send(&gsystem_protocol::sysex::DEVICE_INQUIRY)
-        .map_err(|e| e.to_string())?;
-    m.wait(
-        Duration::from_millis(1500),
-        gsystem_protocol::sysex::parse_identity,
-    )
-    .ok_or_else(|| "No G-System answered on these ports".to_string())
+async fn midi_identify(input: String, output: String) -> Result<String, String> {
+    blocking(move || {
+        let mut m = Midi::open(&input, &output)?;
+        while m.rx.try_recv().is_ok() {}
+        m.out
+            .send(&gsystem_protocol::sysex::DEVICE_INQUIRY)
+            .map_err(|e| e.to_string())?;
+        let mut other: Option<Vec<u8>> = None;
+        let found = m.wait(Duration::from_millis(2000), |b| {
+            let id = gsystem_protocol::sysex::parse_identity(b);
+            if id.is_none() && other.is_none() {
+                other = Some(b.to_vec());
+            }
+            id
+        });
+        found.ok_or_else(|| match other {
+            Some(b) => format!(
+                "Something answered on these ports, but not as a G-System: {}",
+                b.iter()
+                    .take(24)
+                    .map(|x| format!("{x:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            None => "No answer on these ports. Check the G-System is switched on and that both \
+                     lists show the G-System's own ports, then try again."
+                .to_string(),
+        })
+    })
+    .await
 }
 
-/// Read user slots `from..=to` from the unit into the open bank.
-/// Returns the slots that answered. Empty slots never answer.
+#[derive(Clone, Serialize)]
+struct BackupProgress {
+    slot: usize,
+    done: usize,
+    total: usize,
+    found: usize,
+}
+
+/// Read user slots `from..=to` from the unit into the open bank, emitting a
+/// `backup-progress` event after each slot. Returns the slots that answered
+/// (empty slots never answer). `midi_cancel` stops it between slots.
 #[tauri::command]
-fn midi_backup(
+async fn midi_backup(
     input: String,
     output: String,
     from: usize,
     to: usize,
-    state: State<AppState>,
+    app: AppHandle,
 ) -> Result<Vec<usize>, String> {
-    let mut m = Midi::open(&input, &output)?;
-    let mut got = Vec::new();
-    for slot in from..=to.min(199) {
-        while m.rx.try_recv().is_ok() {}
-        m.out
-            .send(&Message::preset_request(0, slot).encode())
-            .map_err(|e| e.to_string())?;
-        let want = gsystem_protocol::sysex::slot_to_number(slot);
-        // A stored preset answers in ~0.77 s.
-        let p = m.wait(Duration::from_millis(1100), |b| match Message::parse(b) {
-            Ok(Message::PresetDump { number, data, .. }) if number == want => {
-                Preset::from_raw(data)
+    blocking(move || {
+        let state = app.state::<AppState>();
+        state.cancel.store(false, Ordering::SeqCst);
+        let mut m = Midi::open(&input, &output)?;
+        let to = to.min(199);
+        let total = to + 1 - from;
+        let mut got = Vec::new();
+        for (n, slot) in (from..=to).enumerate() {
+            if state.cancel.load(Ordering::SeqCst) {
+                break;
             }
-            _ => None,
-        });
-        if let Some(p) = p {
-            state.bank.lock().unwrap().set(slot, p);
-            state.dirty.lock().unwrap().remove(&slot);
-            got.push(slot);
+            while m.rx.try_recv().is_ok() {}
+            m.out
+                .send(&Message::preset_request(0, slot).encode())
+                .map_err(|e| e.to_string())?;
+            let want = gsystem_protocol::sysex::slot_to_number(slot);
+            // A stored preset answers in ~0.77 s.
+            let p = m.wait(Duration::from_millis(1100), |b| match Message::parse(b) {
+                Ok(Message::PresetDump { number, data, .. }) if number == want => {
+                    Preset::from_raw(data)
+                }
+                _ => None,
+            });
+            if let Some(p) = p {
+                state.bank.lock().unwrap().set(slot, p);
+                state.dirty.lock().unwrap().remove(&slot);
+                got.push(slot);
+            }
+            let _ = app.emit(
+                "backup-progress",
+                BackupProgress {
+                    slot,
+                    done: n + 1,
+                    total,
+                    found: got.len(),
+                },
+            );
         }
-    }
-    Ok(got)
+        Ok(got)
+    })
+    .await
+}
+
+/// Stop a running bank read after the current slot.
+#[tauri::command]
+fn midi_cancel(state: State<AppState>) {
+    state.cancel.store(true, Ordering::SeqCst);
 }
 
 /// Writing presets to the unit is disabled in the app: the store sequence the
@@ -471,7 +560,8 @@ pub fn run() {
             midi_audition,
             midi_live,
             midi_backup,
-            midi_send
+            midi_send,
+            midi_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
