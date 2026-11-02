@@ -7,6 +7,12 @@
 //! Because no driver claims the interface, we can open it ourselves with
 //! libusb and speak USB-MIDI's 4-byte event packets directly.
 //!
+//! On current macOS that still fails: the bulk endpoints declare a 4-byte
+//! max packet size (full speed allows only 8/16/32/64), and the system never
+//! creates their pipes; transfers fail with "pipe ref not recognized"
+//! (0xe0004061), which libusb reports as NotFound. Seen on Jeff's unit on
+//! Apple silicon, Nov 2026. Writes then return [`MACOS_REFUSES`].
+//!
 //! [`open`] shares one connection per process (the interface can be
 //! claimed only once); every opener gets its own receiver of complete SysEx
 //! messages.
@@ -22,6 +28,13 @@ pub const TC_VENDOR: u16 = 0x1220;
 pub const PRODUCTS: &[u16] = &[0x0005];
 /// The name shown in port lists for the direct connection.
 pub const PORT_NAME: &str = "G-System (USB)";
+
+/// What the user sees when macOS won't open the unit's USB endpoints.
+pub const MACOS_REFUSES: &str = "macOS won't open the G-System's USB endpoints: the unit's USB \
+descriptors don't follow the USB standard (bulk endpoints with 4-byte packets and no Audio Control \
+interface), and current macOS refuses them (\"pipe ref not recognized\"). TC's 2008 Mac driver \
+worked around this; modern macOS can't load it. Use a USB-MIDI interface on the G-System's 5-pin \
+MIDI In/Out jacks instead. The unit's USB port works from Linux and Android.";
 
 const AUDIO_CLASS: u8 = 1;
 const MIDI_STREAMING: u8 = 3;
@@ -108,7 +121,13 @@ impl UsbMidi {
             } else {
                 s.handle.write_interrupt(s.ep_out, chunk, IO_TIMEOUT)
             }
-            .map_err(|e| format!("USB write failed: {e}"))?;
+            .map_err(|e| {
+                if cfg!(target_os = "macos") && e == rusb::Error::NotFound {
+                    MACOS_REFUSES.to_string()
+                } else {
+                    format!("USB write failed: {e}")
+                }
+            })?;
             if n != chunk.len() {
                 return Err(format!(
                     "USB write was short ({n} of {} bytes)",

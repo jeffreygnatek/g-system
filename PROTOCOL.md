@@ -22,9 +22,13 @@ Sources, and how much to trust each line:
   but **no Audio Control interface**, which the USB-MIDI spec requires next
   to it **[ours, from a unit on macOS]**. Linux and Android accept it and
   create a MIDI port **[DA]**; **macOS doesn't attach its MIDI driver, so no
-  MIDI port appears.** Since nothing claims the interface, the editor and
-  `gsys` open it directly with libusb and exchange USB-MIDI 1.0 event packets
-  (crate `gsystem-usb`; the port is shown as "G-System (USB)").
+  MIDI port appears.** The bulk endpoints (`0x02` out, `0x82` in) also
+  declare a **4-byte max packet size**, which full-speed bulk doesn't allow
+  (8/16/32/64). Opening the interface directly with libusb (crate
+  `gsystem-usb`) claims it, but current macOS never creates the pipes:
+  transfers fail with "pipe ref not recognized" (`0xe0004061`). **On a modern
+  Mac, use a USB-MIDI interface on the 5-pin jacks.** TC's 2008 Mac driver
+  presumably worked around both; macOS can no longer load drivers of that kind.
 - **5-pin MIDI** through any USB-MIDI interface also works.
 
 ## SysEx framing [ours, DA]
