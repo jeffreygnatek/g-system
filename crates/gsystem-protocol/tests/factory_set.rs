@@ -203,3 +203,45 @@ fn every_factory_preset_passes_validation() {
         }
     }
 }
+
+#[test]
+fn prs_preset_buffer_loads_despite_its_stale_checksum() {
+    // Twilight.Prs stores a dump whose checksum doesn't match its data (Vyzor
+    // computes it when sending); the preset inside is "Grainiac".
+    let b = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../testdata/Twilight.Prs"
+    ))
+    .unwrap();
+    let bank = vyzor::load_bank(&b).unwrap();
+    assert_eq!(bank.occupied(), 1);
+    let p = bank.get(0).unwrap();
+    assert_eq!(p.name(), "Grainiac");
+    let r = gsystem_protocol::validate::check(p);
+    assert!(r.is_ok(), "{}", r.summary());
+}
+
+#[test]
+fn ebf_edit_buffer_decodes_the_shorter_layout() {
+    use gsystem_protocol::sysex::to_nibbles;
+    // Build an .Ebf-style BODY from a factory preset: 10 zero bytes, the first
+    // 509 bytes as nibbles, a checksum byte, F7.
+    let bank = vyzor::load_bank(&factory()).unwrap();
+    let src = bank.get(0).unwrap();
+    let mut body = vec![0u8; 10];
+    body.extend(to_nibbles(&src.raw[..vyzor::EDIT_BUFFER_BYTES]));
+    body.extend([0x00, 0xF7]);
+    body.resize(1246, 0);
+    let p = vyzor::decode_edit_buffer(&body).unwrap();
+    assert_eq!(p.name(), src.name());
+    // Everything up to the last modifier slot is identical…
+    let last = gsystem_protocol::modifiers::MODIFIER_FIELD
+        + gsystem_protocol::modifiers::MODIFIER_SLOTS
+        - 1;
+    for f in 0..last {
+        assert_eq!(p.param_i24(f), src.param_i24(f), "field {f}");
+    }
+    // …the missing tail reads as "unassigned / no NovaDrive".
+    assert_eq!(gsystem_protocol::novadrive::nova_preset(&p), 0);
+    assert!(gsystem_protocol::validate::check(&p).is_ok());
+}

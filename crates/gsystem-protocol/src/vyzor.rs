@@ -139,24 +139,82 @@ pub fn decode_slot(slot: &[u8]) -> Option<(Option<u8>, Preset)> {
     Some((no, Preset::from_raw(data)?))
 }
 
-/// Load every preset document's BODY into a bank, by slot position.
+/// A single-preset document's dump, without checking the stored checksum.
+///
+/// Vyzor's `.Prs` ("Preset buffer") files keep the preset in BODY as a
+/// headerless dump, and the TRAN script builds the message from it when sending
+/// (computing the checksum then). The stored checksum is often stale in
+/// community files, so it can't be used to reject them; `validate::check`
+/// is what vets the values.
+pub fn decode_preset_buffer(body: &[u8]) -> Option<Preset> {
+    if body.len() < PRESET_DUMP_LEN || body[11 + PRESET_NIBBLES] != SYSEX_END {
+        return None;
+    }
+    let nibbles = &body[10..10 + PRESET_NIBBLES];
+    if nibbles.iter().all(|&n| n == 0) {
+        return None;
+    }
+    Preset::from_raw(from_nibbles(nibbles).ok()?)
+}
+
+/// Bytes of preset data in a Vyzor `.Ebf` ("Edit Buffer") document: the usual
+/// layout without its last 7 bytes (the end of modifier slot 38 and the
+/// NovaDrive fields 163–164), as nibbles from offset 10, then a checksum
+/// (often stale) and usually `F7`.
+pub const EDIT_BUFFER_BYTES: usize = 509;
+
+/// Decode an `.Ebf` BODY. The missing tail is filled in as "nothing there":
+/// modifier slot 38 unassigned and no NovaDrive preset.
+pub fn decode_edit_buffer(body: &[u8]) -> Option<Preset> {
+    let end = 10 + EDIT_BUFFER_BYTES * 2;
+    if body.len() < end {
+        return None;
+    }
+    let nibbles = &body[10..end];
+    if nibbles.iter().all(|&n| n == 0) {
+        return None;
+    }
+    let mut raw = from_nibbles(nibbles).ok()?;
+    raw.resize(crate::sysex::PRESET_BYTES, 0);
+    let mut p = Preset::from_raw(raw)?;
+    let last = crate::modifiers::MODIFIER_SLOTS - 1;
+    crate::modifiers::write_modifier(&mut p, last, crate::modifiers::UNASSIGNED);
+    Some(p)
+}
+
+/// Load every preset in a Vyzor file into a bank, by slot position.
+///
+/// Document kinds: "User Bank" (`.SQS`: 200 × 1310-byte dump slots, each
+/// checksum-verified), "Preset" (`.Prs`: one dump, see
+/// [`decode_preset_buffer`]) and "Edit Buffer" (`.Ebf`, see
+/// [`decode_edit_buffer`]). A `.SQS` can hold several documents.
 pub fn load_bank(b: &[u8]) -> Result<Bank, Error> {
     let forms = parse_forms(b)?;
     let mut bank = Bank::empty();
     let mut any = false;
-    // Document kinds seen: "Preset" (single preset, body holds edit messages,
-    // not a dump), "Edit Buffer", "User Bank" (200 × 1310-byte dump slots).
-    // Try every BODY; only real dump slots decode.
     for f in &forms {
         let Some(body) = f.chunk(b"BODY") else {
             continue;
         };
-        if body.data.len() % SLOT_LEN != 0 {
-            continue;
-        }
-        for (i, slot) in body.data.chunks(SLOT_LEN).enumerate() {
-            if let Some((_, p)) = decode_slot(slot) {
-                bank.set(i, p);
+        let kind = f.document_kind().unwrap_or_default();
+        if kind == "User Bank" || (kind.is_empty() && body.data.len() == 200 * SLOT_LEN) {
+            if body.data.len() % SLOT_LEN != 0 {
+                continue;
+            }
+            for (i, slot) in body.data.chunks(SLOT_LEN).enumerate() {
+                if let Some((_, p)) = decode_slot(slot) {
+                    bank.set(i, p);
+                    any = true;
+                }
+            }
+        } else if kind.starts_with("Preset") {
+            if let Some(p) = decode_preset_buffer(body.data) {
+                bank.set(0, p);
+                any = true;
+            }
+        } else if kind.starts_with("Edit Buffer") {
+            if let Some(p) = decode_edit_buffer(body.data) {
+                bank.set(0, p);
                 any = true;
             }
         }

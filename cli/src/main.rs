@@ -93,7 +93,20 @@ fn main() {
             let mut seen = std::collections::HashSet::new();
             let (mut next, mut dupes, mut full) = (0usize, 0usize, 0usize);
             for path in &args[2..] {
-                let bank = load_any(Path::new(path));
+                let bytes = match std::fs::read(path) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("skipped {path}: {e}");
+                        continue;
+                    }
+                };
+                let bank = match vyzor::load_bank(&bytes).or_else(|_| syx::load_bank(&bytes)) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("skipped {path}: {e}");
+                        continue;
+                    }
+                };
                 let mut added = 0;
                 for p in bank.slots.iter().flatten() {
                     let key = gsystem_protocol::validate::canonical_bytes(p);
