@@ -115,8 +115,7 @@ shared, and download what you like. It has accounts and profiles (sign in with
 an email link, Google or GitHub), lets you follow other players, and shows who
 uploaded what. Every upload is decoded and checked with this repo's
 `gsystem-protocol` crate; duplicates of the same sound and TC's own factory
-presets are turned away. The source is in
-[jeffreygnatek/g-system-online](https://github.com/jeffreygnatek/g-system-online).
+presets are turned away.
 It isn't live yet.
 
 ## Installing
